@@ -1,0 +1,60 @@
+{
+  "entities": {
+    "Report": {
+      "title": "Diagnostic Report",
+      "description": "A diagnostic report generated from Kavach logs.",
+      "type": "object",
+      "properties": {
+        "locoId": { "type": "string", "description": "The ID of the locomotive." },
+        "date": { "type": "string", "format": "date-time", "description": "The timestamp when the report was generated." },
+        "overallPerformance": { "type": "number", "description": "Overall performance percentage." },
+        "nmsFailRate": { "type": "number", "description": "NMS failure rate percentage." },
+        "avgLag": { "type": "number", "description": "Average MA refresh lag in seconds." },
+        "badStations": { "type": "array", "items": { "type": "string" }, "description": "List of stations with poor performance." },
+        "userId": { "type": "string", "description": "The UID of the user who generated the report." },
+        "notes": { "type": "string", "description": "Optional notes added by the user." },
+        "status": { "type": "string", "enum": ["Pending", "Reviewed", "Resolved"], "description": "Status of the report." },
+        "isFlagged": { "type": "boolean", "description": "Whether the report is flagged for attention." },
+        "fullData": { "type": "string", "description": "Stringified JSON of the full analysis data for recall." },
+        "originalFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "type": { "type": "string" }
+            }
+          },
+          "description": "List of original log files uploaded to Firebase Storage."
+        }
+      },
+      "required": ["locoId", "date", "userId"]
+    },
+    "StationHistory": {
+      "title": "Station History",
+      "description": "Historical performance data for a specific station.",
+      "type": "object",
+      "properties": {
+        "stationId": { "type": "string", "description": "The ID of the station." },
+        "date": { "type": "string", "format": "date-time", "description": "The timestamp of the record." },
+        "locoId": { "type": "string", "description": "The ID of the locomotive involved." },
+        "percentage": { "type": "number", "description": "Communication success percentage." },
+        "received": { "type": "number", "description": "Number of packets received." },
+        "expected": { "type": "number", "description": "Number of packets expected." },
+        "userId": { "type": "string", "description": "The UID of the user." }
+      },
+      "required": ["stationId", "date", "userId"]
+    }
+  },
+  "firestore": {
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Collection of diagnostic reports."
+    },
+    "/station_history/{historyId}": {
+      "schema": "StationHistory",
+      "description": "Collection of historical station performance data."
+    }
+  }
+}
