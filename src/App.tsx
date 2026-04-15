@@ -676,11 +676,12 @@ export default function App() {
           b.time, 
           b.type, 
           `${b.speed} Kmph`, 
-          b.location
+          b.location,
+          formatStationName(b.stationId)
         ]);
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Time', 'Type', 'Speed', 'Location']],
+          head: [['Time', 'Type', 'Speed', 'Location', 'Station']],
           body: brakeRows,
           theme: 'striped',
           headStyles: { fillColor: [245, 158, 11] }, // Amber-500
@@ -2308,7 +2309,14 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
               <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center">
                 <div>
                   <p className="text-xs font-bold text-white">{b.type}</p>
-                  <p className="text-[10px] text-slate-500">{b.time} | Loc: {b.location}</p>
+                  <p className="text-[10px] text-slate-500">
+                    {b.time} | Loc: {b.location}
+                    {formatStationName(b.stationId) !== 'N/A' && (
+                      <span className="ml-2 text-emerald-400 font-bold uppercase">
+                        @ {formatStationName(b.stationId)}
+                      </span>
+                    )}
+                  </p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-bold text-amber-400">{b.speed} Kmph</p>

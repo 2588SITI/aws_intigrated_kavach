@@ -1120,7 +1120,7 @@ export const processDashboardData = (
     const colR = trnKeys[17]; // Column R is index 17
     const trnTagLinkCol = findColumn(firstTrn, 'Tag Link Info', 'TagLinkInfo', 'TagInfo') || colR;
     const trnStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
-    const trnStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name') || trnKeys[2];
+    const trnStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name', 'STATION') || trnKeys[2];
 
     // Forward-fill stationId and stationName for TRN data
     let lastSeenStnId = 'N/A';
@@ -1153,7 +1153,7 @@ export const processDashboardData = (
 
         trnTagIssues.push({
           time: time,
-          stationId: trnStnInfo[idx].id,
+          stationId: trnStnInfo[idx].name !== 'N/A' ? trnStnInfo[idx].name : trnStnInfo[idx].id,
           info: String(row[trnTagLinkCol]),
           error: errorType,
           locoId: lId,
@@ -1237,7 +1237,8 @@ export const processDashboardData = (
     
     const status = String(row[nmsHealthCol] || '').trim();
     const lId = String(row[trnLocoIdCol] || locoId).trim();
-    const stnId = trnStnInfo[idx]?.id || 'N/A';
+    const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
+    const stnId = stn.name !== 'N/A' ? stn.name : stn.id;
     const time = getTrnTime(row);
 
     if (status === '0' || status === 'healthy' || status === 'ok' || status === '') {
@@ -1328,7 +1329,7 @@ export const processDashboardData = (
     const rawMode = String(row[modeCol] || '').trim();
     const currentAck = String(row[lpResponseCol] || '').trim();
     const event = String(row[eventCol] || '').toLowerCase();
-    const stnId = trnStnInfo[idx]?.id || 'N/A';
+    const stnId = (trnStnInfo[idx]?.name && trnStnInfo[idx]?.name !== 'N/A') ? trnStnInfo[idx].name : (trnStnInfo[idx]?.id || 'N/A');
     const stnName = trnStnInfo[idx]?.name || 'N/A';
     const rawReason = String(row[reasonCol] || '').trim();
     
@@ -1449,7 +1450,7 @@ export const processDashboardData = (
   const lastBrakeState: Record<string, string> = {};
   const trnStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
 
-  trnData?.forEach(row => {
+  trnData?.forEach((row, idx) => {
     const lIdVal = getBestLocoIdFromRow(row, trnKeys, locoId);
     if (!isValidLocoId(lIdVal)) return;
 
@@ -1463,12 +1464,13 @@ export const processDashboardData = (
 
     // Log every instance where a brake is active to match user expectation of "29 times"
     if (hasBrake) {
+      const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
       brakeApplications.push({
         time: getTrnTime(row),
         type: isEB ? 'Emergency Brake (EB)' : (isSB ? 'Service Brake (SB)' : String(row[eventCol])),
         speed: Number(row[speedCol]) || 0,
         location: String(row[locationCol] || 'N/A'),
-        stationId: String(row[trnStnIdCol] || 'N/A'),
+        stationId: stn.name !== 'N/A' ? stn.name : stn.id,
         locoId: lIdVal,
         radio: String(row[trnRadioCol] || '').trim()
       });
@@ -1481,14 +1483,17 @@ export const processDashboardData = (
   // Signal Overrides
   const signalOverrides = trnData
     ?.filter(row => String(row[eventCol] || '').toLowerCase().includes('override') && isValidLocoId(row[trnLocoIdCol] || locoId))
-    .map(row => ({
-      time: getTrnTime(row),
-      signalId: String(row[signalIdCol] || 'N/A'),
-      status: String(row[signalStatusCol] || 'Overridden'),
-      stationId: String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A'),
-      locoId: String(row[trnLocoIdCol] || locoId).trim(),
-      radio: String(row[trnRadioCol] || '').trim()
-    })) || [];
+    .map((row, idx) => {
+      const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
+      return {
+        time: getTrnTime(row),
+        signalId: String(row[signalIdCol] || 'N/A'),
+        status: String(row[signalStatusCol] || 'Overridden'),
+        stationId: stn.name !== 'N/A' ? stn.name : stn.id,
+        locoId: String(row[trnLocoIdCol] || locoId).trim(),
+        radio: String(row[trnRadioCol] || '').trim()
+      };
+    }) || [];
 
   // Train Config Changes
   const trainConfigChanges: DashboardStats['trainConfigChanges'] = [];
