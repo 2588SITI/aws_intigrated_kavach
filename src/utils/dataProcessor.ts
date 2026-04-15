@@ -893,6 +893,8 @@ export const processDashboardData = (
     return {
       stationId,
       percentage,
+      expected: data.expected,
+      received: data.received,
       locoId: data.locoId,
       date: data.date,
       startTime: sortedTimes.length > 0 ? sortedTimes[0] : 'N/A',
@@ -970,16 +972,22 @@ export const processDashboardData = (
   }> = {};
   
   stnPerf.forEach(s => {
-    if (s.percentage < 85) {
+    // Only consider it a failure if there were actually packets expected
+    if (s.percentage < 85 && s.expected > 0) {
       if (!stnLocoMap[s.stationId]) stnLocoMap[s.stationId] = { locoDetails: [], totalPerf: 0, count: 0 };
-      stnLocoMap[s.stationId].locoDetails.push({
-        id: s.locoId,
-        perf: s.percentage,
-        startTime: s.startTime,
-        endTime: s.endTime
-      });
-      stnLocoMap[s.stationId].totalPerf += s.percentage;
-      stnLocoMap[s.stationId].count++;
+      
+      // Avoid duplicate loco entries for the same station
+      const existingLoco = stnLocoMap[s.stationId].locoDetails.find(l => l.id === s.locoId);
+      if (!existingLoco) {
+        stnLocoMap[s.stationId].locoDetails.push({
+          id: s.locoId,
+          perf: s.percentage,
+          startTime: s.startTime,
+          endTime: s.endTime
+        });
+        stnLocoMap[s.stationId].totalPerf += s.percentage;
+        stnLocoMap[s.stationId].count++;
+      }
     }
   });
 
