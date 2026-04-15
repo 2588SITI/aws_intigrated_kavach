@@ -319,7 +319,152 @@ export const formatStationName = (stn: string | number | undefined) => {
   return `${s} STATION`;
 };
 
+export const generateDiagnosticAdvice = (stats: Partial<DashboardStats>): DashboardStats['diagnosticAdvice'] => {
+  const diagnosticAdvice: DashboardStats['diagnosticAdvice'] = [];
+  const { 
+    avgLag = 0, 
+    modeDegradations = [], 
+    nmsFailRate = 0, 
+    tagLinkIssues = [], 
+    intervalDist = [], 
+    arCount = 0, 
+    maCount = 0,
+    unhealthyStns = [],
+    warningStns = [],
+    nmsLogs = []
+  } = stats;
+
+  if (avgLag > 1.2) {
+    diagnosticAdvice.push({
+      title: "Packet Refresh Lag Detected",
+      detail: `Average MA packet interval is ${avgLag.toFixed(2)}s (Standard requirement is 1.0s).`,
+      action: "Test: Radio Latency Test. Check: Station TCAS CPU load, Radio modem serial baud rate, and RF interference.",
+      severity: 'medium'
+    });
+  }
+
+  if (unhealthyStns.length > 0) {
+    const formatted = unhealthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`);
+    diagnosticAdvice.push({
+      title: "Station Hardware Unhealthy (Red)",
+      detail: `Stations ${formatted.join(', ')} are performing below 85%. This indicates a potential radio link failure or consecutive packet loss.`,
+      action: `Immediate audit required for track-side Kavach equipment at stations [${unhealthyStns.map(s => formatStationName(s.id)).join(', ')}]. Check for complete radio link failure.`,
+      severity: 'high'
+    });
+  }
+
+  if (warningStns.length > 0) {
+    const formatted = warningStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`);
+    diagnosticAdvice.push({
+      title: "Station Hardware Warning (Yellow)",
+      detail: `Stations ${formatted.join(', ')} are performing between 85% and 95%. This indicates packet drops, likely due to Radio 1/2 failure or weak signal strength (<-90 dBm).`,
+      action: `Monitor and audit the track-side Kavach equipment at stations [${warningStns.map(s => formatStationName(s.id)).join(', ')}]. Check Radio 1/2 status and signal strength.`,
+      severity: 'medium'
+    });
+  }
+
+  if (modeDegradations.length > 0) {
+    const radioRelated = modeDegradations.filter(d => d.reason.toLowerCase().includes('radio packet loss') || d.reason.toLowerCase().includes('packet loss'));
+    const rfRelated = modeDegradations.filter(d => d.reason.toLowerCase().includes('poor rf') || d.reason.toLowerCase().includes('signal'));
+    
+    const getAffectedStns = (list: any[]) => {
+      const stns = Array.from(new Set(list.map(d => {
+        const id = d.stationId;
+        const name = d.stationName;
+        if ((!id || id === 'N/A') && (!name || name === 'N/A')) return null;
+        return formatStationName(name && name !== 'N/A' ? name : id);
+      }).filter(s => s !== null)));
+      return stns.length > 0 ? ` at Stations: ${stns.join(', ')}` : ' (station location not resolved — check TRN log Station ID column)';
+    };
+
+    if (radioRelated.length > 0) {
+      diagnosticAdvice.push({
+        title: "Radio Packet Loss causing Mode Degradation",
+        detail: `${radioRelated.length} mode degradation events were directly correlated with radio packet timeouts (> 2s)${getAffectedStns(radioRelated)}.`,
+        action: "Check: Radio modem power stability, antenna VSWR, and potential RF interference in the section.",
+        severity: 'high'
+      });
+    } else if (rfRelated.length > 0) {
+      diagnosticAdvice.push({
+        title: "Poor RF Signal causing Mode Degradation",
+        detail: `${rfRelated.length} mode degradation events were correlated with low RF signal strength${getAffectedStns(rfRelated)}.`,
+        action: "Check: Station antenna alignment, cable attenuation, and potential signal blockage or interference.",
+        severity: 'medium'
+      });
+    }
+  }
+
+  if (nmsFailRate > 10) {
+    // Per-loco NMS Analysis
+    const locoNms: Record<string, { total: number; errors: number }> = {};
+    nmsLogs.forEach(log => {
+      const lId = String(log.locoId);
+      if (!locoNms[lId]) locoNms[lId] = { total: 0, errors: 0 };
+      locoNms[lId].total++;
+      const health = String(log.health).toLowerCase();
+      if (health !== '0' && health !== 'healthy' && health !== 'ok') {
+        locoNms[lId].errors++;
+      }
+    });
+
+    const worstLocos = Object.entries(locoNms)
+      .map(([id, data]) => ({ id, rate: (data.errors / data.total) * 100 }))
+      .filter(l => l.rate > 0)
+      .sort((a, b) => b.rate - a.rate)
+      .slice(0, 3);
+
+    const locoDetail = worstLocos.length > 0 
+      ? `. Affected locos: ${worstLocos.map(l => `Loco ${l.id} (${l.rate.toFixed(1)}%)`).join(', ')}. Prioritise inspection of Loco ${worstLocos[0].id} first.`
+      : '';
+
+    diagnosticAdvice.push({
+      title: "High NMS Error Rate",
+      detail: `${nmsFailRate.toFixed(1)}% of NMS health records indicate non-zero status. This suggests internal hardware module faults or communication lag between TCAS and NMS${locoDetail}`,
+      action: "Check: Loco Vital Computer (LVC) health logs, BIU interface, and RFID reader connectivity.",
+      severity: nmsFailRate > 30 ? 'high' : 'medium'
+    });
+  }
+
+  if (tagLinkIssues.length > 0) {
+    // Group by station
+    const stnGroups: Record<string, { main: number; dup: number }> = {};
+    tagLinkIssues.forEach(t => {
+      const stn = formatStationName(t.stationId);
+      const key = stn === 'N/A' ? 'Unknown location (station ID not resolved)' : stn;
+      if (!stnGroups[key]) stnGroups[key] = { main: 0, dup: 0 };
+      if (t.error === "Main Tag Missing") stnGroups[key].main++;
+      else if (t.error === "Duplicate Tag Missing") stnGroups[key].dup++;
+    });
+
+    const breakdown = Object.entries(stnGroups)
+      .map(([stn, counts]) => `${stn} [Main: ${counts.main}, Dup: ${counts.dup}]`)
+      .join('; ');
+
+    diagnosticAdvice.push({
+      title: "RFID Tag Link Failures",
+      detail: `${tagLinkIssues.length} instances of Tag Link Missing or Duplicate Tag Missing detected. Breakdown: ${breakdown}.`,
+      action: "Check: Track-side RFID tag placement, tag programming, and Loco RFID reader sensitivity.",
+      severity: 'medium'
+    });
+  }
+
+  if (intervalDist.length > 0) {
+    const critical = intervalDist.find(d => d.category === '> 2.0s');
+    if (critical && critical.percentage > 5) {
+      diagnosticAdvice.push({
+        title: "Critical Packet Interval Violations",
+        detail: `${critical.percentage.toFixed(1)}% of MA packets arrived with a delay > 2.0s, which is a direct cause for Kavach session termination.`,
+        action: "Check: Radio network congestion, station processing overhead, and RF signal stability.",
+        severity: 'high'
+      });
+    }
+  }
+
+  return diagnosticAdvice;
+};
+
 export const processDashboardData = (
+
   rfData: RFData[],
   trnData: TRNData[] | null,
   radioData: RadioData[],
@@ -798,8 +943,24 @@ export const processDashboardData = (
     percentage: data.exp > 0 ? (data.rec / data.exp) * 100 : 0
   }));
 
-  const badStns = globalStationPerf.filter(s => s.percentage < 95).map(s => s.stationId);
-  const goodStns = globalStationPerf.filter(s => s.percentage >= 98).map(s => s.stationId);
+  const badStns = globalStationPerf.filter(s => s.percentage < 85).map(s => s.stationId);
+  const marginalStns = globalStationPerf.filter(s => s.percentage >= 85 && s.percentage <= 95).map(s => s.stationId);
+  const goodStns = globalStationPerf.filter(s => s.percentage > 95).map(s => s.stationId);
+
+  const unhealthyStns = globalStationPerf
+    .filter(s => s.percentage < 85)
+    .map(s => ({ id: s.stationId, pct: s.percentage }))
+    .sort((a, b) => a.pct - b.pct);
+
+  const warningStns = globalStationPerf
+    .filter(s => s.percentage >= 85 && s.percentage <= 95)
+    .map(s => ({ id: s.stationId, pct: s.percentage }))
+    .sort((a, b) => a.pct - b.pct);
+
+  const healthyStns = globalStationPerf
+    .filter(s => s.percentage > 95)
+    .map(s => ({ id: s.stationId, pct: s.percentage }))
+    .sort((a, b) => a.pct - b.pct);
 
   // Multi-Loco Bad Station Logic
   const stnLocoMap: Record<string | number, { 
@@ -809,7 +970,7 @@ export const processDashboardData = (
   }> = {};
   
   stnPerf.forEach(s => {
-    if (s.percentage < 95) {
+    if (s.percentage < 85) {
       if (!stnLocoMap[s.stationId]) stnLocoMap[s.stationId] = { locoDetails: [], totalPerf: 0, count: 0 };
       stnLocoMap[s.stationId].locoDetails.push({
         id: s.locoId,
@@ -826,8 +987,8 @@ export const processDashboardData = (
     .filter(([stationId, data]) => {
       const g = globalStationStats.get(stationId);
       const globalPerf = g && g.exp > 0 ? (g.rec / g.exp) * 100 : 100;
-      // Only include if multiple locos failed AND the overall station performance is below 95%
-      return data.locoDetails.length > 1 && globalPerf < 95;
+      // Only include if multiple locos failed AND the overall station performance is below 85%
+      return data.locoDetails.length > 1 && globalPerf < 85;
     })
     .map(([stationId, data]) => ({
       stationId,
@@ -951,14 +1112,33 @@ export const processDashboardData = (
   // Also check TRNMSNMA for Tag Link Issues (User specified Column R)
   const trnTagIssues: any[] = [];
   const seenTrnTagIssues = new Set<string>();
+  let trnStnInfo: { id: string, name: string }[] = [];
+  
   if (trnData) {
     const firstTrn = trnData[0] || {};
-    // Try to find column R (18th column) or a named column
     const trnKeys = Object.keys(firstTrn);
     const colR = trnKeys[17]; // Column R is index 17
     const trnTagLinkCol = findColumn(firstTrn, 'Tag Link Info', 'TagLinkInfo', 'TagInfo') || colR;
+    const trnStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
+    const trnStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name') || trnKeys[2];
 
-    trnData.forEach(row => {
+    // Forward-fill stationId and stationName for TRN data
+    let lastSeenStnId = 'N/A';
+    let lastSeenStnName = 'N/A';
+    trnStnInfo = trnData.map(row => {
+      const sId = String(row[trnStnIdCol] || '').trim();
+      const sName = String(row[trnStnNameCol] || '').trim();
+
+      if (sId && sId !== 'N/A' && sId !== '-' && sId !== '0' && sId !== '0.0') {
+        lastSeenStnId = sId;
+      }
+      if (sName && sName !== 'N/A' && sName !== '-' && sName !== '0' && sName !== '0.0') {
+        lastSeenStnName = sName;
+      }
+      return { id: lastSeenStnId, name: lastSeenStnName };
+    });
+
+    trnData.forEach((row, idx) => {
       const info = String(row[trnTagLinkCol] || '').toLowerCase();
       if (info.includes('maintagmissing') || info.includes('duplicatetagmissing')) {
         const time = getTrnTime(row);
@@ -971,14 +1151,14 @@ export const processDashboardData = (
         if (info.includes('maintagmissing')) errorType = "Main Tag Missing";
         if (info.includes('duplicatetagmissing')) errorType = "Duplicate Tag Missing";
 
-      trnTagIssues.push({
-        time: time,
-        stationId: String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A'),
-        info: String(row[trnTagLinkCol]),
-        error: errorType,
-        locoId: lId,
-        radio: String(row[trnRadioCol] || '').trim()
-      });
+        trnTagIssues.push({
+          time: time,
+          stationId: trnStnInfo[idx].id,
+          info: String(row[trnTagLinkCol]),
+          error: errorType,
+          locoId: lId,
+          radio: String(row[trnRadioCol] || '').trim()
+        });
       }
     });
   }
@@ -1052,12 +1232,12 @@ export const processDashboardData = (
   const nmsDeepAnalysis: DashboardStats['nmsDeepAnalysis'] = [];
   let currentNmsEvent: any = null;
 
-  trnData?.forEach((row) => {
+  trnData?.forEach((row, idx) => {
     if (!isValidLocoId(row[trnLocoIdCol] || locoId)) return;
     
     const status = String(row[nmsHealthCol] || '').trim();
     const lId = String(row[trnLocoIdCol] || locoId).trim();
-    const stnId = String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A');
+    const stnId = trnStnInfo[idx]?.id || 'N/A';
     const time = getTrnTime(row);
 
     if (status === '0' || status === 'healthy' || status === 'ok' || status === '') {
@@ -1095,8 +1275,7 @@ export const processDashboardData = (
         description = 'Self-diagnosis reported a non-zero health status requiring servicing.';
       }
 
-      const stnNameCol = findColumn(row, 'Station Name', 'StationName', 'Station_Name');
-      const stnName = stnNameCol ? String(row[stnNameCol] || '').trim() : String(row[trnKeys[2]] || '').trim();
+      const stnName = trnStnInfo[idx]?.name || 'N/A';
 
       currentNmsEvent = {
         locoId: lId,
@@ -1138,7 +1317,7 @@ export const processDashboardData = (
     'Unknown': 10 // High priority to avoid false positives on first row
   };
   
-  trnData?.forEach((row) => {
+  trnData?.forEach((row, idx) => {
     const trnKeys = Object.keys(row);
     const locoIdVal = getBestLocoIdFromRow(row, trnKeys, locoId);
     if (!isValidLocoId(locoIdVal)) return;
@@ -1149,6 +1328,8 @@ export const processDashboardData = (
     const rawMode = String(row[modeCol] || '').trim();
     const currentAck = String(row[lpResponseCol] || '').trim();
     const event = String(row[eventCol] || '').toLowerCase();
+    const stnId = trnStnInfo[idx]?.id || 'N/A';
+    const stnName = trnStnInfo[idx]?.name || 'N/A';
     const rawReason = String(row[reasonCol] || '').trim();
     
     // Normalize mode names for detection
@@ -1232,9 +1413,6 @@ export const processDashboardData = (
 
           if (shouldInclude) {
             const time = getTrnTime(row);
-            const stnNameCol = findColumn(row, 'Station Name', 'StationName', 'Station_Name');
-            const stnName = stnNameCol ? String(row[stnNameCol] || '').trim() : String(row[trnKeys[2]] || '').trim();
-
             // USER REQUEST: Identify the previous mode for the 'From' column.
             // We look at the last known mode for the SAME locomotive that was NOT 'TR'.
             // This ensures the transition is correctly attributed to the specific loco's operational state.
@@ -1249,7 +1427,7 @@ export const processDashboardData = (
               to: currentMode,
               reason: reason,
               lpResponse: currentAck,
-              stationId: String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A'),
+              stationId: stnId,
               stationName: stnName,
               locoId: locoIdVal,
               radio: String(row[trnRadioCol] || '').trim()
@@ -1605,92 +1783,17 @@ export const processDashboardData = (
     percentage: (count / totalProcessed) * 100,
   }));
 
-  // Dynamic Diagnostic Advice
-  const diagnosticAdvice: DashboardStats['diagnosticAdvice'] = [];
-
-  if (nmsFailRate > 10) {
-    diagnosticAdvice.push({
-      title: "NMS Health Critical Failure",
-      detail: `NMS Health failure rate is ${nmsFailRate.toFixed(1)}%. The NMS Health column should ideally maintain a value of 0 (Healthy). Your data contains anomalous values in ${nmsFailRate.toFixed(1)}% of rows, indicating persistent hardware or internal communication issues.`,
-      action: "Test: Check Loco Vital Computer (LVC) logs for specific card failures (e.g., BIU Interface, RFID Reader). Check: Internal communication links and redundant processor synchronization.",
-      severity: 'high'
-    });
-  }
-
-  if (maCount < arCount * 0.5) {
-    diagnosticAdvice.push({
-      title: "Critical Session Instability",
-      detail: `System is sending ${arCount} Access Requests but only receiving ${maCount} Movement Authorities.`,
-      action: "Test: RF Signal Strength (RSSI) measurement. Check: Radio Modem, Antenna alignment, and RF Surge Arrestors.",
-      severity: 'high'
-    });
-  }
-
-  if (avgLag > 1.2) {
-    diagnosticAdvice.push({
-      title: "Packet Refresh Lag Detected",
-      detail: `Average MA packet interval is ${avgLag.toFixed(2)}s (Standard requirement is 1.0s).`,
-      action: "Test: Radio Latency Test. Check: Station TCAS CPU load, Radio modem serial baud rate, and RF interference.",
-      severity: 'medium'
-    });
-  }
-
-  if (badStns.length > 0) {
-    const formattedBadStns = badStns.map(id => formatStationName(stationMap[id] || String(id)));
-    diagnosticAdvice.push({
-      title: "Station Hardware Marginal Performance",
-      detail: `Stations ${formattedBadStns.join(', ')} are performing below the 95% efficiency threshold.`,
-      action: `Audit the track-side Kavach equipment and signal strength at stations [${formattedBadStns.join(', ')}] to resolve the localized communication drops.`,
-      severity: 'medium'
-    });
-  }
-
-  if (modeDegradations.length > 0) {
-    const radioRelated = modeDegradations.filter(d => d.reason.includes('Radio Packet Loss'));
-    const rfRelated = modeDegradations.filter(d => d.reason.includes('Poor RF Signal'));
-    
-    const getAffectedStns = (list: any[]) => {
-      const stns = Array.from(new Set(list.map(d => {
-        const id = d.stationId;
-        if (!id || id === 'N/A') return null;
-        const name = d.stationName || stationMap[id] || String(id);
-        return formatStationName(name);
-      }).filter(s => s !== null)));
-      return stns.length > 0 ? ` at Stations: ${stns.join(', ')}` : '';
-    };
-
-    if (radioRelated.length > 0) {
-      diagnosticAdvice.push({
-        title: "Radio Packet Loss causing Mode Degradation",
-        detail: `${radioRelated.length} mode degradation events were directly correlated with radio packet timeouts (> 2s)${getAffectedStns(radioRelated)}.`,
-        action: "Check: Radio modem power stability, antenna VSWR, and potential RF interference in the section.",
-        severity: 'high'
-      });
-    } else if (rfRelated.length > 0) {
-      diagnosticAdvice.push({
-        title: "Poor RF Signal causing Mode Degradation",
-        detail: `${rfRelated.length} mode degradation events were correlated with low RF signal strength (< 80%)${getAffectedStns(rfRelated)}.`,
-        action: "Check: Antenna alignment, RF cable health, and signal coverage in the affected station areas.",
-        severity: 'high'
-      });
-    } else {
-      diagnosticAdvice.push({
-        title: "Mode Degradation Events Detected",
-        detail: `${modeDegradations.length} mode degradation events were recorded in the TRNMSNMA logs${getAffectedStns(modeDegradations)}.`,
-        action: "Check: LP Response times, NMS Health correlation, and Radio MA lag at the time of degradation.",
-        severity: 'high'
-      });
-    }
-  }
-
-  if (diagnosticAdvice.length === 0) {
-    diagnosticAdvice.push({
-      title: "System Healthy",
-      detail: "All parameters are within normal RDSO limits.",
-      action: "Routine: Perform weekly visual inspection of all RF connectors and ensure all modules are properly seated.",
-      severity: 'low'
-    });
-  }
+  const diagnosticAdvice = generateDiagnosticAdvice({
+    avgLag,
+    badStns,
+    marginalStns,
+    modeDegradations: modeDegradationsToUse,
+    nmsFailRate,
+    tagLinkIssues,
+    intervalDist,
+    arCount,
+    maCount
+  });
 
   // Time Range Logic
   const allTimes: string[] = [];
@@ -1965,7 +2068,7 @@ export const processDashboardData = (
     .filter(([stnId]) => {
       const g = globalStationStats.get(stnId);
       const globalPerf = g && g.exp > 0 ? (g.rec / g.exp) * 100 : 100;
-      return globalPerf < 95;
+      return globalPerf < 95; // Only show stations that are not "Healthy"
     })
     .map(([stnId, data]) => {
       const healthScore = (data.workingEvents / (data.totalEvents || 1)) * 100;
@@ -1974,7 +2077,7 @@ export const processDashboardData = (
         failureCount: data.count,
         avgLossDuration: data.count > 0 ? data.totalDuration / data.count : 0,
         healthScore,
-        status: (healthScore < 80 ? 'Critical' : healthScore < 90 ? 'Warning' : 'Healthy') as any,
+        status: (healthScore < 85 ? 'Unhealthy' : healthScore <= 95 ? 'Warning' : 'Healthy') as any,
         affectedLocos: Array.from(data.locos)
       };
     })
@@ -2495,7 +2598,11 @@ export const processDashboardData = (
     locoIds,
     stnPerf,
     badStns,
+    marginalStns,
     goodStns,
+    unhealthyStns,
+    warningStns,
+    healthyStns,
     locoPerformance,
     arCount,
     maCount,

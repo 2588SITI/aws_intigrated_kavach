@@ -54,7 +54,11 @@ export interface DashboardStats {
   locoIds: (string | number)[];
   stnPerf: { stationId: string | number; percentage: number; locoId: string | number; date?: string }[];
   badStns: (string | number)[];
+  marginalStns?: (string | number)[];
   goodStns: (string | number)[];
+  unhealthyStns?: { id: string | number; pct: number }[];
+  warningStns?: { id: string | number; pct: number }[];
+  healthyStns?: { id: string | number; pct: number }[];
   locoPerformance: number;
   arCount: number;
   maCount: number;
@@ -123,7 +127,7 @@ export interface DashboardStats {
       failureCount: number;
       avgLossDuration: number;
       healthScore: number;
-      status: 'Critical' | 'Warning' | 'Healthy';
+      status: 'Unhealthy' | 'Warning' | 'Healthy';
       affectedLocos: (string | number)[];
     }[];
     faultyLocos: {

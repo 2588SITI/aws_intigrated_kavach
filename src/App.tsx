@@ -42,7 +42,7 @@ import {
   LabelList,
   ReferenceLine
 } from 'recharts';
-import { parseFile, processDashboardData, parseDateString, formatStationName } from './utils/dataProcessor';
+import { parseFile, processDashboardData, parseDateString, formatStationName, generateDiagnosticAdvice } from './utils/dataProcessor';
 import { DashboardStats } from './types';
 import { CalculationMethodology } from './components/CalculationMethodology';
 import { cn } from './utils/cn';
@@ -528,8 +528,38 @@ export default function App() {
         ? totalOverallPercSum / totalOverallRowCount 
         : 0;
       
-      filtered.badStns = Array.from(new Set(filtered.stationStats.filter(s => s.percentage < 95).map(s => String(s.stationId))));
-      filtered.goodStns = Array.from(new Set(filtered.stationStats.filter(s => s.percentage >= 95).map(s => String(s.stationId))));
+      // Create per-station weighted average for summary cards to avoid duplicates and show correct weighted %
+      const stnSummary: Record<string, { exp: number, rec: number }> = {};
+      filtered.stationStats.forEach(s => {
+        const id = String(s.stationId);
+        if (!stnSummary[id]) stnSummary[id] = { exp: 0, rec: 0 };
+        stnSummary[id].exp += s.expected;
+        stnSummary[id].rec += s.received;
+      });
+
+      const stnPerfList = Object.entries(stnSummary).map(([id, data]) => ({
+        id,
+        pct: data.exp > 0 ? (data.rec / data.exp) * 100 : 0
+      }));
+
+      filtered.badStns = stnPerfList.filter(s => s.pct < 85).map(s => s.id);
+      filtered.marginalStns = stnPerfList.filter(s => s.pct >= 85 && s.pct <= 95).map(s => s.id);
+      filtered.goodStns = stnPerfList.filter(s => s.pct > 95).map(s => s.id);
+
+      filtered.unhealthyStns = stnPerfList
+        .filter(s => s.pct < 85)
+        .sort((a, b) => a.pct - b.pct);
+      
+      filtered.warningStns = stnPerfList
+        .filter(s => s.pct >= 85 && s.pct <= 95)
+        .sort((a, b) => a.pct - b.pct);
+      
+      filtered.healthyStns = stnPerfList
+        .filter(s => s.pct > 95)
+        .sort((a, b) => a.pct - b.pct);
+
+      // Recalculate Diagnostic Advice for filtered data
+      filtered.diagnosticAdvice = generateDiagnosticAdvice(filtered);
     }
 
     // Update Deep Analysis for the selected loco
@@ -678,6 +708,52 @@ export default function App() {
         doc.text(actionLines, 30, adviceY + 5);
         adviceY += 10 + (actionLines.length * 4);
       });
+
+      // 6. Station Performance Summary
+      if (adviceY > 240) { doc.addPage(); adviceY = 20; }
+      doc.setFontSize(16);
+      doc.setTextColor(0, 102, 204);
+      doc.text('6. Station Performance Summary', 20, adviceY);
+      
+      let stnY = adviceY + 10;
+      
+      if (filteredStats.unhealthyStns && filteredStats.unhealthyStns.length > 0) {
+        doc.setFontSize(11);
+        doc.setTextColor(220, 50, 50); // Rose-500
+        doc.text('🔴 Unhealthy Stations (<85%):', 25, stnY);
+        doc.setFontSize(9);
+        doc.setTextColor(0);
+        const text = filteredStats.unhealthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
+        const lines = doc.splitTextToSize(text, 160);
+        doc.text(lines, 30, stnY + 5);
+        stnY += 10 + (lines.length * 4);
+      }
+      
+      if (filteredStats.warningStns && filteredStats.warningStns.length > 0) {
+        if (stnY > 270) { doc.addPage(); stnY = 20; }
+        doc.setFontSize(11);
+        doc.setTextColor(245, 158, 11); // Amber-500
+        doc.text('🟡 Warning Stations (85-95%):', 25, stnY);
+        doc.setFontSize(9);
+        doc.setTextColor(0);
+        const text = filteredStats.warningStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
+        const lines = doc.splitTextToSize(text, 160);
+        doc.text(lines, 30, stnY + 5);
+        stnY += 10 + (lines.length * 4);
+      }
+      
+      if (filteredStats.healthyStns && filteredStats.healthyStns.length > 0) {
+        if (stnY > 270) { doc.addPage(); stnY = 20; }
+        doc.setFontSize(11);
+        doc.setTextColor(16, 185, 129); // Emerald-500
+        doc.text('🟢 Healthy Stations (>95%):', 25, stnY);
+        doc.setFontSize(9);
+        doc.setTextColor(0);
+        const text = filteredStats.healthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
+        const lines = doc.splitTextToSize(text, 160);
+        doc.text(lines, 30, stnY + 5);
+        stnY += 10 + (lines.length * 4);
+      }
 
       // 4. Deep Analysis Section (New Page)
       doc.addPage();
@@ -934,7 +1010,7 @@ export default function App() {
       
       const metricsData = [
         ['Metric', 'Value', 'Status'],
-        ['Overall RFCOMM Success', `${filteredStats.locoPerformance.toFixed(2)}%`, filteredStats.locoPerformance >= 95 ? 'Healthy' : 'Sub-optimal'],
+        ['Overall RFCOMM Success', `${filteredStats.locoPerformance.toFixed(2)}%`, filteredStats.locoPerformance > 95 ? 'Healthy' : filteredStats.locoPerformance >= 85 ? 'Warning' : 'Unhealthy'],
         ['NMS Software Health', `${(100 - filteredStats.nmsFailRate).toFixed(2)}%`, filteredStats.nmsFailRate <= 5 ? 'Healthy' : 'Critical'],
         ['Avg Radio MA Lag', `${filteredStats.avgLag.toFixed(2)}s`, filteredStats.avgLag <= 1.5 ? 'Normal' : 'High Latency'],
         ['Critical Tag Link Issues', `${filteredStats.tagLinkIssues.length}`, filteredStats.tagLinkIssues.length === 0 ? 'None' : 'Action Required']
@@ -1138,8 +1214,9 @@ export default function App() {
           reasoning += `LOGICAL PROOF: The failure is marked as FLIMSY/WRONG. The performance drops are observed at [${conciseStnList}] across multiple locomotives. Since multiple locos are failing at the same spot, the fault lies with the Station TCAS equipment. The locomotive unit under analysis is performing normally elsewhere. \n\nDetailed Performance Audit: [${detailedStnList}]. `;
         } else if (hasInternalFault && !hasExternalSymptom) {
           reasoning += `Although NMS health is reported as sub-optimal (${filteredStats.nmsFailRate.toFixed(1)}% non-32 codes), the RFCOMM performance is stable at ${filteredStats.locoPerformance.toFixed(2)}% with 0 Tag issues. This indicates that the NMS codes are 'Transient' or 'Informational' and do not constitute a functional failure. `;
-        } else if (filteredStats.badStns.length > 0 && filteredStats.badStns.length <= 2) {
-          reasoning += `The performance drops are highly localized to ${filteredStats.badStns.map(id => formatStationName(id)).join(', ')}, proving that the issue is Track-side (RFID/Signal) and the Locomotive unit is healthy. `;
+        } else if ((filteredStats.badStns.length + (filteredStats.marginalStns?.length || 0)) > 0 && (filteredStats.badStns.length + (filteredStats.marginalStns?.length || 0)) <= 2) {
+          const allAffected = [...filteredStats.badStns, ...(filteredStats.marginalStns || [])];
+          reasoning += `The performance drops are highly localized to ${allAffected.map(id => formatStationName(id)).join(', ')}, proving that the issue is Track-side (RFID/Signal) and the Locomotive unit is healthy. `;
         }
         reasoning += `The locomotive is technically fit for operation.`;
       }
@@ -1152,8 +1229,9 @@ export default function App() {
         if (filteredStats.multiLocoBadStns.length > 0) {
           const stnIds = filteredStats.multiLocoBadStns.map(s => formatStationName(s.stationId)).join(', ');
           recommendation = `1. URGENT: Inspect Station TCAS/Kavach equipment at Stations [${stnIds}] as multiple locomotives are failing there. 2. Perform a technical audit of the Loco Processing Unit (CPU) and Power Supply Module.`;
-        } else if (filteredStats.nmsFailRate > 50 && filteredStats.badStns.length === 1) {
-          recommendation = `1. Inspect Station Kavach equipment at ${formatStationName(filteredStats.badStns[0])} for CPU/Radio faults. 2. If the problem persists across other stations, replace the Loco Processing Unit (CPU) and check the Power Supply Module.`;
+        } else if (filteredStats.nmsFailRate > 50 && (filteredStats.badStns.length + (filteredStats.marginalStns?.length || 0)) === 1) {
+          const stnId = filteredStats.badStns[0] || filteredStats.marginalStns?.[0];
+          recommendation = `1. Inspect Station Kavach equipment at ${formatStationName(stnId)} for CPU/Radio faults. 2. If the problem persists across other stations, replace the Loco Processing Unit (CPU) and check the Power Supply Module.`;
         } else {
           recommendation = `Immediate inspection of the Kavach antenna, RF cables, and NMS processing unit is required at the shed. The locomotive should be grounded for a full technical audit and recalibration.`;
         }
@@ -1162,7 +1240,8 @@ export default function App() {
           const stnIds = filteredStats.multiLocoBadStns.map(s => formatStationName(s.stationId)).join(', ');
           recommendation = `The locomotive is fit for service. The reported communication drops are due to faulty Station-side equipment at [${stnIds}]. URGENT track-side audit is required at these locations.`;
         } else {
-          recommendation = `The locomotive is fit for service. No hardware replacement is required. It is recommended to audit the track-side Kavach equipment and signal strength at stations [${filteredStats.badStns.map(id => formatStationName(id)).join(', ')}] to resolve the localized communication drops.`;
+          const allAffected = [...filteredStats.badStns, ...(filteredStats.marginalStns || [])];
+          recommendation = `The locomotive is fit for service. No hardware replacement is required. It is recommended to audit the track-side Kavach equipment and signal strength at stations [${allAffected.map(id => formatStationName(id)).join(', ')}] to resolve the localized communication drops.`;
         }
       }
       bodyY = writeText(recommendation, bodyY + 2);
@@ -1941,12 +2020,24 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
                 />
                 <ReferenceLine 
                   y={95} 
-                  stroke="#f43f5e" 
+                  stroke="#10b981" 
                   strokeDasharray="3 3" 
                   label={{ 
-                    value: '95% Threshold', 
+                    value: '95% Healthy', 
                     position: 'right', 
-                    fill: '#f43f5e', 
+                    fill: '#10b981', 
+                    fontSize: 10,
+                    fontWeight: 'bold'
+                  }} 
+                />
+                <ReferenceLine 
+                  y={85} 
+                  stroke="#f59e0b" 
+                  strokeDasharray="3 3" 
+                  label={{ 
+                    value: '85% Warning', 
+                    position: 'right', 
+                    fill: '#f59e0b', 
                     fontSize: 10,
                     fontWeight: 'bold'
                   }} 
@@ -2017,11 +2108,11 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
                     <div className="flex items-center gap-2">
                       <div className="w-12 h-1.5 bg-white/5 rounded-full overflow-hidden">
                         <div 
-                          className={cn("h-full", s.percentage < 95 ? "bg-rose-500" : "bg-emerald-500")} 
+                          className={cn("h-full", s.percentage < 85 ? "bg-rose-500" : s.percentage <= 95 ? "bg-amber-500" : "bg-emerald-500")} 
                           style={{ width: `${s.percentage}%` }} 
                         />
                       </div>
-                      <span className={cn("font-bold", s.percentage < 95 ? "text-rose-400" : "text-emerald-400")}>
+                      <span className={cn("font-bold", s.percentage < 85 ? "text-rose-400" : s.percentage <= 95 ? "text-amber-400" : "text-emerald-400")}>
                         {s.percentage.toFixed(2)}%
                       </span>
                     </div>
@@ -2600,7 +2691,7 @@ function StatusBox({ title, items }: { title: string; items: { label: string; st
               <span className={cn(
                 "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter",
                 item.status === 'Healthy' ? "bg-emerald-500/20 text-emerald-400" : 
-                item.status === 'Marginal' ? "bg-amber-500/20 text-amber-400" : "bg-rose-500/20 text-rose-400"
+                item.status === 'Warning' || item.status === 'Marginal' ? "bg-amber-500/20 text-amber-400" : "bg-rose-500/20 text-rose-400"
               )}>
                 {item.status}
               </span>
@@ -2638,16 +2729,36 @@ function ExecutiveSummary({ stats, setActiveTab }: { stats: DashboardStats; setA
             title="1. Hardware Analysis"
             items={[
               { label: "Locomotives Analyzed", status: "Healthy", reason: `Total ${stats.locoIds.length} unique locomotives identified: ${stats.locoIds.join(', ')}.` },
-              { label: `Loco ${stats.locoId} Performance`, status: stats.locoPerformance >= 98 ? "Healthy" : "Marginal", reason: `Loco ${stats.locoId} achieved ${stats.locoPerformance.toFixed(1)}% performance across all stations.` },
-              { label: "Station Hardware", status: stats.badStns.length > 0 ? "Marginal" : "Healthy", reason: stats.badStns.length > 0 ? `Significant drops detected at ${stats.badStns.map(id => formatStationName(id)).join(', ')}.` : "All stations performing optimally." }
+              { label: `Loco ${stats.locoId} Performance`, status: stats.locoPerformance > 95 ? "Healthy" : (stats.locoPerformance >= 85 ? "Warning" : "Unhealthy"), reason: `Loco ${stats.locoId} achieved ${stats.locoPerformance.toFixed(1)}% performance across all stations.` },
+              { 
+                label: "🔴 Unhealthy Stations (<85%)", 
+                status: stats.unhealthyStns && stats.unhealthyStns.length > 0 ? "Unhealthy" : "Healthy", 
+                reason: stats.unhealthyStns && stats.unhealthyStns.length > 0 
+                  ? `Critical drops: ${stats.unhealthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ')}.` 
+                  : "No critical hardware failures detected." 
+              },
+              { 
+                label: "🟡 Warning Stations (85-95%)", 
+                status: stats.warningStns && stats.warningStns.length > 0 ? "Warning" : "Healthy", 
+                reason: stats.warningStns && stats.warningStns.length > 0 
+                  ? `Significant drops: ${stats.warningStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ')}.` 
+                  : "No marginal performance issues detected." 
+              },
+              { 
+                label: "🟢 Healthy Stations (>95%)", 
+                status: "Healthy", 
+                reason: stats.healthyStns && stats.healthyStns.length > 0 
+                  ? `Optimal performance: ${stats.healthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ')}.` 
+                  : "No stations currently meet the high-performance benchmark." 
+              }
             ]}
           />
 
           <StatusBox 
             title="2. Protocol Analysis"
             items={[
-              { label: "Sync Analysis", status: stats.avgLag <= 1.2 ? "Healthy" : "Marginal", reason: `AR: ${stats.arCount} | MA: ${stats.maCount}. Ratio: ${((stats.maCount / (stats.arCount || 1)) * 100).toFixed(1)}%.` },
-              { label: "Packet Interval Analysis", status: stats.avgLag <= 1.0 ? "Healthy" : "Marginal", reason: `Average MA interval: ${stats.avgLag.toFixed(2)}s. RDSO standard is 1.0s.` }
+              { label: "Sync Analysis", status: stats.avgLag <= 1.2 ? "Healthy" : "Warning", reason: `AR: ${stats.arCount} | MA: ${stats.maCount}. Ratio: ${((stats.maCount / (stats.arCount || 1)) * 100).toFixed(1)}%.` },
+              { label: "Packet Interval Analysis", status: stats.avgLag <= 1.0 ? "Healthy" : "Warning", reason: `Average MA interval: ${stats.avgLag.toFixed(2)}s. RDSO standard is 1.0s.` }
             ]}
           />
           
@@ -2813,10 +2924,10 @@ function DeepMapping({ stats, files }: { stats: DashboardStats; files: { rf: Fil
     },
     {
       id: 3,
-      title: "Station Hardware Marginal Status",
+      title: "Station Hardware Warning/Unhealthy Status",
       source: files.rf.length > 0 ? files.rf.map(f => f.name).join(', ') : 'N/A',
       column: "'Station Id' and 'Percentage'",
-      detail: `Average percentage analysis indicates that signal strength at stations ${stats.badStns.join(', ') || 'None'} has fallen below the 95% threshold.`
+      detail: `Average percentage analysis indicates that signal strength at stations ${stats.badStns.join(', ') || 'None'} has fallen below the 85% Unhealthy threshold, and stations ${stats.marginalStns?.join(', ') || 'None'} are in the 85-95% Warning range.`
     },
     {
       id: 4,
