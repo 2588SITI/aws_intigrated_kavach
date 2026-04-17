@@ -772,8 +772,8 @@ export default function App() {
       currentY += 20;
 
       // Verdict Boxes (Visual)
-      const isLFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Loco');
-      const isSFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Station');
+      const isLFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Suspect') || filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
+      const isSFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Station') || filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
       
       doc.setFillColor(isLFaulty ? 255 : 240, isLFaulty ? 230 : 240, isLFaulty ? 230 : 240);
       doc.rect(20, currentY, 55, 30, 'F');
@@ -1790,7 +1790,7 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
           </div>
           
           <div className="relative z-10">
-            <div className="flex items-center justify-between mb-8">
+            <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-6">
               <div>
                 <h2 className="text-3xl font-black text-white tracking-tighter flex items-center gap-3">
                   <ShieldCheck className="w-8 h-8 text-emerald-400" />
@@ -1800,8 +1800,42 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
                   Conclusion: {stats.stationDeepAnalysis.dashboard.conclusion}
                 </p>
               </div>
-              <div className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
-                <span className="text-emerald-400 text-xs font-black uppercase tracking-tighter animate-pulse">Live Diagnostic Active</span>
+              
+              <div className="flex gap-3">
+                {/* Verdict Boxes */}
+                {(() => {
+                  const isLFaulty = stats.stationDeepAnalysis.dashboard.conclusion.includes('Suspect') || stats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
+                  const isSFaulty = stats.stationDeepAnalysis.dashboard.conclusion.includes('Station') || stats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
+                  
+                  return (
+                    <>
+                      <div className={cn(
+                        "px-4 py-2 rounded-xl border flex flex-col items-center justify-center min-w-[100px]",
+                        isLFaulty ? "bg-rose-500/10 border-rose-500/30" : "bg-emerald-500/10 border-emerald-500/30"
+                      )}>
+                        <span className="text-[9px] font-black text-slate-500 uppercase">Loco TCAS</span>
+                        <span className={cn("text-sm font-black", isLFaulty ? "text-rose-400" : "text-emerald-400")}>
+                          {isLFaulty ? 'SUSPECT' : 'FIT'}
+                        </span>
+                      </div>
+
+                      <div className={cn(
+                        "px-4 py-2 rounded-xl border flex flex-col items-center justify-center min-w-[100px]",
+                        isSFaulty ? "bg-amber-500/10 border-amber-500/30" : "bg-emerald-500/10 border-emerald-500/30"
+                      )}>
+                        <span className="text-[9px] font-black text-slate-500 uppercase">Station TCAS</span>
+                        <span className={cn("text-sm font-black", isSFaulty ? "text-amber-400" : "text-emerald-400")}>
+                          {isSFaulty ? 'INSPECT' : 'HEALTHY'}
+                        </span>
+                      </div>
+
+                      <div className="px-4 py-2 rounded-xl border bg-blue-500/10 border-blue-500/30 flex flex-col items-center justify-center min-w-[100px]">
+                        <span className="text-[9px] font-black text-slate-500 uppercase">Benchmark</span>
+                        <span className="text-sm font-black text-blue-400">CLEARED</span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
