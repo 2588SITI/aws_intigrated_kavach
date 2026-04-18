@@ -1502,14 +1502,15 @@ export const processDashboardData = (
     // Check for EB or SB in either the event description or the dedicated brake column (Column T)
     const isEB = event.includes('eb applied') || brakeVal === 'EB' || event.includes('emergency brake');
     const isSB = event.includes('sb applied') || brakeVal === 'SB' || event.includes('service brake');
-    const hasBrake = isEB || isSB || (event.includes('brake') && !event.includes('released'));
+    const isFSB = event.includes('fsb applied') || brakeVal === 'FSB' || event.includes('full service brake');
+    const hasBrake = isEB || isSB || isFSB || (event.includes('brake') && !event.includes('released'));
 
     // Log every instance where a brake is active to match user expectation of "29 times"
     if (hasBrake) {
       const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
       brakeApplications.push({
         time: getTrnTime(row),
-        type: isEB ? 'Emergency Brake (EB)' : (isSB ? 'Service Brake (SB)' : String(row[eventCol])),
+        type: isEB ? 'Emergency Brake (EB)' : (isFSB ? 'Full Service Brake (FSB)' : (isSB ? 'Service Brake (SB)' : String(row[eventCol]))),
         speed: Number(row[speedCol]) || 0,
         location: String(row[locationCol] || 'N/A'),
         stationId: stn.name !== 'N/A' ? stn.name : stn.id,
@@ -1518,7 +1519,7 @@ export const processDashboardData = (
       });
     }
     
-    const currentState = isEB ? 'EB' : (isSB ? 'SB' : 'None');
+    const currentState = isEB ? 'EB' : (isFSB ? 'FSB' : (isSB ? 'SB' : 'None'));
     lastBrakeState[lIdVal] = currentState;
   });
 
