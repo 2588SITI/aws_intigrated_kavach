@@ -788,13 +788,12 @@ export const processDashboardData = (
     }
     
     // Priority 2: Extracted from filename (very reliable for station logs)
-    // We use it if stnId is missing or if it looks like a generic value
     const isGeneric = !stnId || ['STATION', 'STN', 'PROJECT', 'SYSTEM'].includes(stnId.toUpperCase());
     if (isGeneric && row['_extractedStationId']) {
       stnId = String(row['_extractedStationId']).trim();
     }
     
-    // Priority 3: Fallback to first column only if we have no other choice and it's not a known non-station-id value
+    // Priority 3: Fallback
     if (!stnId && !sIdCol && keys.length > 0) {
       const fallbackId = String(row[keys[0]] || '').trim();
       const blacklist = ['project', 'system', 'log', 'report', 'date', 'time', 'loco', 'train'];
@@ -803,7 +802,11 @@ export const processDashboardData = (
       }
     }
     
-    if (!stnId || stnId.toLowerCase() === 'station id' || stnId.toLowerCase() === 'stationid') {
+    // NORMALIZATION FIX:
+    // Ensure "ST" and "ST STATION" are merged into the same key
+    stnId = stnId.toUpperCase().replace(/\s+STATION$/i, '').trim();
+
+    if (!stnId || stnId === 'STATION ID' || stnId === 'STATIONID') {
       skippedRfRows++;
       return;
     }
@@ -916,6 +919,9 @@ export const processDashboardData = (
       } else if (row['_extractedStationId']) {
         sId = String(row['_extractedStationId']).trim();
       }
+
+      // NORMALIZATION FIX:
+      sId = sId.toUpperCase().replace(/\s+STATION$/i, '').trim() || 'N/A';
       
       return {
         stationId: sId,
@@ -965,38 +971,62 @@ export const processDashboardData = (
     .sort((a, b) => a.pct - b.pct);
 
   // Multi-Loco Bad Station Logic
+  // First, aggregate performance PER loco PER station
+  const stationLocoAggregates = new Map<string, Map<string, { exp: number, rec: number }>>();
+  
+  stnPerf.forEach(s => {
+    const sId = String(s.stationId);
+    const lId = String(s.locoId);
+    if (!stationLocoAggregates.has(sId)) stationLocoAggregates.set(sId, new Map());
+    const lMap = stationLocoAggregates.get(sId)!;
+    if (!lMap.has(lId)) lMap.set(lId, { exp: 0, rec: 0 });
+    const m = lMap.get(lId)!;
+    m.exp += (s as any).expected || 0;
+    m.rec += (s as any).received || 0;
+  });
+
   const stnLocoMap: Record<string | number, { 
     locoDetails: { id: string | number; perf: number; startTime: string; endTime: string }[];
     totalPerf: number; 
     count: number 
   }> = {};
   
-  stnPerf.forEach(s => {
-    // Only consider it a failure if there were actually packets expected
-    if (s.percentage < 85 && s.expected > 0) {
-      if (!stnLocoMap[s.stationId]) stnLocoMap[s.stationId] = { locoDetails: [], totalPerf: 0, count: 0 };
+  stationLocoAggregates.forEach((lMap, sId) => {
+    lMap.forEach((m, lId) => {
+      const avgPerf = m.exp > 0 ? (m.rec / m.exp) * 100 : 0;
       
-      // Avoid duplicate loco entries for the same station
-      const existingLoco = stnLocoMap[s.stationId].locoDetails.find(l => l.id === s.locoId);
-      if (!existingLoco) {
-        stnLocoMap[s.stationId].locoDetails.push({
-          id: s.locoId,
-          perf: s.percentage,
-          startTime: s.startTime,
-          endTime: s.endTime
+      // Only count as a "failed loco" if its TOTAL performance at this station is < 85%
+      if (avgPerf < 85 && m.exp > 0) {
+        if (!stnLocoMap[sId]) stnLocoMap[sId] = { locoDetails: [], totalPerf: 0, count: 0 };
+        
+        // Find time range for this loco at this station
+        const locoTimes = stnPerf
+          .filter(p => String(p.stationId) === sId && String(p.locoId) === lId)
+          .map(p => (p as any).startTime || '')
+          .filter(t => t !== '')
+          .sort();
+
+        stnLocoMap[sId].locoDetails.push({
+          id: lId,
+          perf: avgPerf,
+          startTime: locoTimes[0] || 'N/A',
+          endTime: locoTimes[locoTimes.length - 1] || 'N/A'
         });
-        stnLocoMap[s.stationId].totalPerf += s.percentage;
-        stnLocoMap[s.stationId].count++;
+        stnLocoMap[sId].totalPerf += avgPerf;
+        stnLocoMap[sId].count++;
       }
-    }
+    });
   });
 
   const multiLocoBadStns = Object.entries(stnLocoMap)
     .filter(([stationId, data]) => {
       const g = globalStationStats.get(stationId);
       const globalPerf = g && g.exp > 0 ? (g.rec / g.exp) * 100 : 100;
-      // Only include if multiple locos failed AND the overall station performance is below 85%
-      return data.locoDetails.length > 1 && globalPerf < 85;
+      // ABSOLUTE PROTECTION: If the station is healthy overall, it cannot be a "bad station"
+      if (globalPerf >= 85) return false;
+      
+      // Must have multiple locos failing
+      return data.locoDetails.length > 1;
     })
     .map(([stationId, data]) => ({
       stationId,
@@ -2183,13 +2213,13 @@ export const processDashboardData = (
   // Deep Analysis Dashboard Logic (DYNAMIC)
   const dashboardTable: { station: string; locoVal: string; othersAvg: string }[] = [];
   
-  // Get all unique stations from RF logs
-  const allStnsInRf = Array.from(new Set(rfStData.map(r => String(r[stnIdCol] || '').trim())))
-    .filter(s => s && s.toLowerCase() !== 'station id' && s.toLowerCase() !== 'stationid');
+  // Get all unique stations from RF logs (NORMALIZED)
+  const allStnsInRf = Array.from(new Set(rfStData.map(r => String(r[stnIdCol] || '').trim().toUpperCase().replace(/\s+STATION$/i, ''))))
+    .filter(s => s && s !== 'STATION ID' && s !== 'STATIONID');
   
   const stnComparisons = allStnsInRf.map(stnIdVal => {
-    const locoStats = rfStData.filter(r => String(r[stnIdCol]) === stnIdVal && String(r[locoIdCol] || '').trim() === String(locoId).trim());
-    const otherStats = rfStData.filter(r => String(r[stnIdCol]) === stnIdVal && String(r[locoIdCol] || '').trim() !== String(locoId).trim());
+    const locoStats = rfStData.filter(r => String(r[stnIdCol] || '').trim().toUpperCase().replace(/\s+STATION$/i, '') === stnIdVal && String(r[locoIdCol] || '').trim() === String(locoId).trim());
+    const otherStats = rfStData.filter(r => String(r[stnIdCol] || '').trim().toUpperCase().replace(/\s+STATION$/i, '') === stnIdVal && String(r[locoIdCol] || '').trim() !== String(locoId).trim());
     
     const locoAvg = locoStats.length > 0 ? locoStats.reduce((acc, r) => acc + (parseFloat(r[percentageCol]) || 0), 0) / locoStats.length : null;
     const othersAvg = otherStats.length > 0 ? otherStats.reduce((acc, r) => acc + (parseFloat(r[percentageCol]) || 0), 0) / otherStats.length : 98.5;
@@ -2247,12 +2277,12 @@ export const processDashboardData = (
   // Pre-calculate station-loco metrics for performance optimization
   const stnLocoMetrics = new Map<string, Map<string, { exp: number, rec: number, sum: number, count: number }>>();
   rfStData.forEach(row => {
-    const sId = String(row[stnIdCol] || '').trim();
+    let sId = String(row[stnIdCol] || '').trim().toUpperCase().replace(/\s+STATION$/i, '');
     const lId = String(row[locoIdCol] || '').trim();
     const exp = parseNumber(row[expectedCol]) || 0;
     const rec = parseNumber(row[receivedCol]) || 0;
     const perc = parseFloat(row[percentageCol]) || (exp > 0 ? (rec / exp) * 100 : 0);
-    if (!sId || !lId || sId.toLowerCase() === 'station id' || sId.toLowerCase() === 'stationid' || lId.toLowerCase() === 'loco id' || lId.toLowerCase() === 'locoid') return;
+    if (!sId || !lId || sId === 'STATION ID' || sId === 'STATIONID' || lId.toLowerCase() === 'loco id' || lId.toLowerCase() === 'locoid') return;
 
     if (!stnLocoMetrics.has(sId)) stnLocoMetrics.set(sId, new Map());
     const lMap = stnLocoMetrics.get(sId)!;
@@ -2545,14 +2575,14 @@ export const processDashboardData = (
     let totalPackets = 0;
     
     lTrnData.forEach(row => {
-      const radioVal = String(row[trnRadioCol] || '').toLowerCase();
-      if (radioVal.includes('radio 1') || radioVal.includes('r1')) r1Packets++;
-      else if (radioVal.includes('radio 2') || radioVal.includes('r2')) r2Packets++;
+      const radioVal = String(row[trnRadioCol] || '').toLowerCase().trim();
+      if (radioVal.includes('radio 1') || radioVal.includes('r1') || radioVal === '1') r1Packets++;
+      else if (radioVal.includes('radio 2') || radioVal.includes('r2') || radioVal === '2') r2Packets++;
       totalPackets++;
     });
     
-    const r1Usage = totalPackets > 0 ? (r1Packets / totalPackets) * 100 : 50;
-    const r2Usage = totalPackets > 0 ? (r2Packets / totalPackets) * 100 : 50;
+    const r1Usage = totalPackets > 0 ? (r1Packets / totalPackets) * 100 : 0;
+    const r2Usage = totalPackets > 0 ? (r2Packets / totalPackets) * 100 : 0;
     
     let movingGaps = 0;
     let maxGap = 0;
@@ -2563,12 +2593,17 @@ export const processDashboardData = (
       const speed = Number(row[speedCol]) || 0;
       const time = parseTime(getTrnTime(row));
       
+      // Check if any radio packet was actually received in this row (Indices 29-57)
       let hasRadio = false;
-      if (trnKeys && trnKeys.length > 0) {
-        for (let j = 29; j <= 57; j++) {
-          if (row[trnKeys[j]] !== undefined && row[trnKeys[j]] !== null && row[trnKeys[j]] !== '' && row[trnKeys[j]] !== 0) { 
-            hasRadio = true; 
-            break; 
+      const keys = Object.keys(row);
+      for (let j = 0; j < keys.length; j++) {
+        const k = keys[j];
+        // Radio columns are usually named or in specific ranges (Column AD to BF)
+        if (k.toLowerCase().includes('pkt') || (j >= 29 && j <= 57)) {
+          const val = row[k];
+          if (val !== undefined && val !== null && val !== '' && val !== 0 && val !== '0') {
+            hasRadio = true;
+            break;
           }
         }
       }
@@ -2576,8 +2611,9 @@ export const processDashboardData = (
       if (hasRadio) {
         if (lastPacketTime !== null) {
           const gap = (time - lastPacketTime) / 1000;
-          // Consider it a moving gap if speed was > 0 either at the start or the end of the gap
-          if ((lastSpeed > 0 || speed > 0) && gap > 5 && gap < 86400) { 
+          // Moving Gap: Speed must be positive and gap must be reasonable (e.g. < 30 mins)
+          // 74,662s is clearly not a "moving gap" but a trip boundary or data gap
+          if ((lastSpeed > 0 || speed > 0) && gap > 5 && gap < 3600) { 
             movingGaps++;
             if (gap > maxGap) maxGap = gap;
           }
