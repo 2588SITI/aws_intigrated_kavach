@@ -479,6 +479,13 @@ export const processDashboardData = (
   const isValidLocoId = (id: any) => {
     if (id === null || id === undefined) return false;
     const s = String(id).trim();
+    // Genuine Kavach Loco IDs are almost always 5-digit numbers (sometimes 4 or 6).
+    // The previous logic was too broad, picking up serial numbers and distances.
+    if (!/^\d{4,6}$/.test(s)) return false; 
+    
+    const n = parseInt(s);
+    if (n < 1000) return false; // Exclude small integers which are likely indices/flags
+
     const low = s.toLowerCase();
     return s !== '' && s !== '-' && s !== 'N/A' && s !== 'null' && s !== 'undefined' && 
            low !== 'loco id' && low !== 'locoid' && low !== 'loco_id' &&
@@ -496,15 +503,8 @@ export const processDashboardData = (
 
   const getBestLocoIdFromRow = (row: any, keys: string[], currentDefault: string) => {
     if (!row) return currentDefault;
-    // Try user specified columns first: I (8) and AI (34)
-    const indices = [8, 34, 17, 33, 4]; // I, AI, R, AH, E
-    for (const idx of indices) {
-      if (keys && keys[idx]) {
-        const val = row[keys[idx]];
-        if (isValidLocoId(val)) return String(val).trim();
-      }
-    }
-    // Try named columns
+    
+    // Priority 1: Named columns (High Confidence)
     const namedCandidates = [
       row[trnLocoIdCol],
       row[locoIdCol],
@@ -513,6 +513,21 @@ export const processDashboardData = (
     ];
     for (const val of namedCandidates) {
       if (isValidLocoId(val)) return String(val).trim();
+    }
+
+    // Priority 2: Traditional indices, but verify headers to avoid distance/packet noise
+    const indices = [8, 34, 17, 33, 4, 10]; // I, AI, R, AH, E, K (deprioritized K)
+    for (const idx of indices) {
+      if (keys && keys[idx]) {
+        const header = String(keys[idx]).toLowerCase();
+        const isLocoHeader = header.includes('loco') || header.includes('engine') || header.includes('id') || header.includes('no');
+        const isSuspicious = header.includes('speed') || header.includes('dist') || header.includes('time') || header.includes('pkt') || header.includes('type');
+        
+        if (isLocoHeader && !isSuspicious) {
+          const val = row[keys[idx]];
+          if (isValidLocoId(val)) return String(val).trim();
+        }
+      }
     }
     return currentDefault;
   };
@@ -816,8 +831,10 @@ export const processDashboardData = (
     const direction = rawDirection.toLowerCase().includes('nominal') ? 'Nominal' : 
                       rawDirection.toLowerCase().includes('reverse') ? 'Reverse' : rawDirection;
     
-    const lIdCol = findInRow('Loco Id', 'LocoId', 'Loco_Id', 'Loco No', 'LocoNo', 'Loco_No', 'Engine No', 'EngineId', 'Loco', 'Engine') || (keys.length > 2 ? keys[2] : '');
-    let rawRowLocoId = row[lIdCol] || row['_extractedLocoId'] || locoId;
+    const lIdCol = findInRow('Loco Id', 'LocoId', 'Loco_Id', 'Loco No', 'LocoNo', 'Loco_No', 'Engine No', 'EngineId', 'Loco', 'Engine');
+    let rawRowLocoId = (lIdCol ? row[lIdCol] : null);
+
+    rawRowLocoId = rawRowLocoId || row['_extractedLocoId'] || locoId;
     
     if (!isValidLocoId(rawRowLocoId)) {
       rawRowLocoId = effectiveSource === 'station' ? 'Station Log' : 'Unknown Loco';
@@ -1499,18 +1516,26 @@ export const processDashboardData = (
     const event = String(row[eventCol] || '').toLowerCase();
     const brakeVal = String(row[brakeCol] || '').toUpperCase().trim();
     
-    // Check for EB or SB in either the event description or the dedicated brake column (Column T)
-    const isEB = event.includes('eb applied') || brakeVal === 'EB' || event.includes('emergency brake');
-    const isSB = event.includes('sb applied') || brakeVal === 'SB' || event.includes('service brake');
-    const isFSB = event.includes('fsb applied') || brakeVal === 'FSB' || event.includes('full service brake');
-    const hasBrake = isEB || isSB || isFSB || (event.includes('brake') && !event.includes('released'));
+    // Check for EB, SB, FSB, or NSF in either the event description or the dedicated brake column (Column T)
+    const isEB = event.includes('eb applied') || brakeVal.includes('EB') || event.includes('emergency brake');
+    const isSB = event.includes('sb applied') || brakeVal.includes('SB') || event.includes('service brake');
+    const isFSB = event.includes('fsb applied') || brakeVal.includes('FSB') || event.includes('full service brake');
+    const isNSF = event.includes('nsf applied') || brakeVal.includes('NSF') || event.includes('normal service');
+    
+    const hasBrake = isEB || isSB || isFSB || isNSF || (event.includes('brake') && !event.includes('released'));
 
     // Log every instance where a brake is active to match user expectation of "29 times"
     if (hasBrake) {
       const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
+      let bType = String(row[eventCol]);
+      if (isEB) bType = 'Emergency Brake (EB)';
+      else if (isFSB) bType = 'Full Service Brake (FSB)';
+      else if (isNSF) bType = 'Normal Service (NSF)';
+      else if (isSB) bType = 'Service Brake (SB)';
+
       brakeApplications.push({
         time: getTrnTime(row),
-        type: isEB ? 'Emergency Brake (EB)' : (isFSB ? 'Full Service Brake (FSB)' : (isSB ? 'Service Brake (SB)' : String(row[eventCol]))),
+        type: bType,
         speed: Number(row[speedCol]) || 0,
         location: String(row[locationCol] || 'N/A'),
         stationId: stn.name !== 'N/A' ? stn.name : stn.id,
@@ -1519,7 +1544,7 @@ export const processDashboardData = (
       });
     }
     
-    const currentState = isEB ? 'EB' : (isFSB ? 'FSB' : (isSB ? 'SB' : 'None'));
+    const currentState = isEB ? 'EB' : (isFSB ? 'FSB' : (isNSF ? 'NSF' : (isSB ? 'SB' : 'None')));
     lastBrakeState[lIdVal] = currentState;
   });
 

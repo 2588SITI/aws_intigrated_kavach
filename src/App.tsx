@@ -2770,7 +2770,11 @@ function ExecutiveSummary({ stats, setActiveTab }: { stats: DashboardStats; setA
           <StatusBox 
             title="1. Hardware Analysis"
             items={[
-              { label: "Locomotives Analyzed", status: "Healthy", reason: `Total ${stats.locoIds.length} unique locomotives identified: ${stats.locoIds.join(', ')}.` },
+              { 
+               label: "Locomotives Analyzed", 
+               status: stats.locoIds.length > 50 ? "Warning" : "Healthy", 
+               reason: `Total ${stats.locoIds.length} unique locomotives identified${stats.locoIds.length > 10 ? ' (Showing first 10)' : ''}: ${stats.locoIds.slice(0, 10).join(', ')}${stats.locoIds.length > 10 ? '...' : '.'}` 
+             },
               { label: `Loco ${stats.locoId} Performance`, status: stats.locoPerformance > 95 ? "Healthy" : (stats.locoPerformance >= 85 ? "Warning" : "Unhealthy"), reason: `Loco ${stats.locoId} achieved ${stats.locoPerformance.toFixed(1)}% performance across all stations.` },
               { 
                 label: "🔴 Unhealthy Stations (<85%)", 
