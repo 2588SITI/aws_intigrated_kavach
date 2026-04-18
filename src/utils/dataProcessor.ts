@@ -1429,17 +1429,21 @@ export const processDashboardData = (
             reason = currentAck || 'Mode Change';
           }
 
-          // USER REQUEST: Exclude Radio Packet Loss from Mode Degradation
           // But InterTagDistGreaterThanDupTag is NOT a radio packet loss issue
           const isInterTagDistIssue = reason.toLowerCase().includes('intertagdistgreaterthanduptag') || 
                                       event.toLowerCase().includes('intertagdistgreaterthanduptag');
 
+          // USER REQUEST: Exclude Radio Packet Loss from Mode Degradation? 
+          // Correction: If it causes a MODE CHANGE, it IS a genuine event. 
+          // We only exclude segments, but here we are in the mode change loop.
           const isRadioPacketLoss = (reason.toLowerCase().includes('packet loss') || 
                                     event.includes('packet loss')) && !isInterTagDistIssue;
 
-          // USER REQUEST: SR/OS/FS transitions are now considered normal (Upgradation)
-          const isSROSFS_Transition = (lastMode === 'FS' || lastMode === 'OS' || lastMode === 'SR') && 
-                                      (currentMode === 'FS' || currentMode === 'OS' || currentMode === 'SR');
+          // USER REQUEST: SR/OS/FS upgrades are normal "startup" transitions and should be hidden.
+          // BUT: Downward transitions (FS -> OS, FS -> SR, OS -> SR) are GENUINE degradations.
+          const isSROSFS_Upgrade = isUpgrade && 
+                                   (lastMode === 'SR' || lastMode === 'OS') && 
+                                   (currentMode === 'OS' || currentMode === 'FS');
 
           // USER REQUEST: Exclude SR/OS transitions during startup or settling
           const isStartupTransition = isStartup && (currentMode === 'SR' || currentMode === 'OS' || currentMode === 'FS');
@@ -1447,8 +1451,8 @@ export const processDashboardData = (
           // USER REQUEST: Exclude NoTagMissing during startup or if it's just a status with No_Ack
           const isNoTagIssue = reason.toLowerCase().includes('notagmissing') && (isStartup || currentAck.toLowerCase().includes('no_ack'));
 
-          // CRITICAL: If the mode is TR (Trip), we MUST show it even if it's related to radio packet loss
-          const shouldInclude = currentMode === 'TR' || (!isRadioPacketLoss && !isSROSFS_Transition && !isStartupTransition && !isNoTagIssue);
+          // CRITICAL: A "Genuine" degradation is any downward transition not part of the startup sequence.
+          const shouldInclude = currentMode === 'TR' || (!isSROSFS_Upgrade && !isStartupTransition && !isNoTagIssue);
 
           if (shouldInclude) {
             const time = getTrnTime(row);
