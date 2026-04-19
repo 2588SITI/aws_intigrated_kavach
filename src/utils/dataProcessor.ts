@@ -37,30 +37,26 @@ export const parseFile = async (file: File | Blob, fileName?: string): Promise<a
           }
         }
 
-        // Extract ID from filename if possible
-        let extractedId: string | null = null;
-        const nameOnly = name.split('/').pop() || name;
-        
-        // Try various patterns for ID extraction
-        // 1. Date prefix: 20260328_VAPI_RFCOMM
-        // 2. No date prefix: VAPI_RFCOMM
-        // 3. Hyphenated IDs: VAPI-UVD_RFCOMM
-        // 4. Station markers: VAPI_ST, VAPI_STN
-        const idMatch = nameOnly.match(/(?:\d{8}_)?([A-Z0-9_\-]{2,15})_(?:RFCOMM|ST|STN)/i) || 
-                        nameOnly.match(/(?:\d{8}_)?([A-Z0-9_\-]{2,15})/i);
-        
-        if (idMatch) {
-          extractedId = idMatch[1];
-          // Clean up if it matched something too long or generic
-          const upperId = extractedId.toUpperCase();
-          if (['RFCOMM', 'STATION', 'TRAIN', 'STN', 'LOCO', 'REPORT', 'LOG'].includes(upperId)) {
-            extractedId = null;
-          }
-        }
+        // Filename extraction disabled per user request
         const isTrainFile = name.toUpperCase().includes('RFCOMM_TR') || name.toUpperCase().includes('LOCO');
         const isStationFile = name.toUpperCase().includes('RFCOMM_ST') || name.toUpperCase().includes('STN') || name.toUpperCase().includes('STATION');
 
-        Papa.parse(text, {
+        // Detect header row in CSV by scanning for expected keywords
+        const lines = text.split('\n');
+        let headerRowIndex = 0;
+        const expectedKeywords = ['Loco Id', 'Date', 'Time', 'Station', 'Direction', 'Expected', 'Received', 'Percentage'];
+        
+        for (let i = 0; i < Math.min(lines.length, 15); i++) {
+          const line = lines[i].toLowerCase();
+          if (expectedKeywords.some(k => line.includes(k.toLowerCase()))) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        
+        const csvContent = lines.slice(headerRowIndex).join('\n');
+
+        Papa.parse(csvContent, {
           header: true,
           dynamicTyping: true,
           skipEmptyLines: true,
@@ -73,10 +69,6 @@ export const parseFile = async (file: File | Blob, fileName?: string): Promise<a
               });
               if (foundDate && !newRow['Date'] && !newRow['Log Date']) {
                 newRow['_extractedDate'] = foundDate;
-              }
-              if (extractedId) {
-                if (isTrainFile) newRow['_extractedLocoId'] = extractedId;
-                if (isStationFile) newRow['_extractedStationId'] = extractedId;
               }
               return newRow;
             });
@@ -153,26 +145,7 @@ export const parseFile = async (file: File | Blob, fileName?: string): Promise<a
           if (foundDate) break;
         }
 
-        // Extract ID from filename if possible
-        let extractedId: string | null = null;
-        const nameOnly = name.split('/').pop() || name;
-        
-        // Try various patterns for ID extraction
-        // 1. Date prefix: 20260328_VAPI_RFCOMM
-        // 2. No date prefix: VAPI_RFCOMM
-        // 3. Hyphenated IDs: VAPI-UVD_RFCOMM
-        // 4. Station markers: VAPI_ST, VAPI_STN
-        const idMatch = nameOnly.match(/(?:\d{8}_)?([A-Z0-9_\-]{2,15})_(?:RFCOMM|ST|STN)/i) || 
-                        nameOnly.match(/(?:\d{8}_)?([A-Z0-9_\-]{2,15})/i);
-        
-        if (idMatch) {
-          extractedId = idMatch[1];
-          // Clean up if it matched something too long or generic
-          const upperId = extractedId.toUpperCase();
-          if (['RFCOMM', 'STATION', 'TRAIN', 'STN', 'LOCO', 'REPORT', 'LOG'].includes(upperId)) {
-            extractedId = null;
-          }
-        }
+        // Filename extraction disabled per user request
         const isTrainFile = name.toUpperCase().includes('RFCOMM_TR') || name.toUpperCase().includes('LOCO');
         const isStationFile = name.toUpperCase().includes('RFCOMM_ST') || name.toUpperCase().includes('STN') || name.toUpperCase().includes('STATION');
 
@@ -184,10 +157,6 @@ export const parseFile = async (file: File | Blob, fileName?: string): Promise<a
           });
           if (foundDate && !newRow['Date'] && !newRow['Log Date']) {
             newRow['_extractedDate'] = foundDate;
-          }
-          if (extractedId) {
-            if (isTrainFile) newRow['_extractedLocoId'] = extractedId;
-            if (isStationFile) newRow['_extractedStationId'] = extractedId;
           }
           return newRow;
         });
@@ -476,19 +445,37 @@ export const processDashboardData = (
   const firstTrn = trnData?.[0] || {};
   const firstRadio = radioData[0] || {};
 
-  const isValidLocoId = (id: any) => {
+  /**
+   * Validates a Locomotive ID.
+   * @param id The value to validate.
+   * @param headerName Optional header name to check against blacklisted columns.
+   */
+  const isValidLocoId = (id: any, headerName?: string) => {
     if (id === null || id === undefined) return false;
     const s = String(id).trim();
-    // Genuine Kavach Loco IDs are almost always 5-digit numbers (sometimes 4 or 6).
-    // The previous logic was too broad, picking up serial numbers and distances.
+    
+    // Explicitly reject if this comes from a "Frame" or "Sequence" column
+    if (headerName) {
+      const hLow = headerName.toLowerCase();
+      if (hLow.includes('frame') || hLow.includes('seq') || hLow.includes('packet') || hLow.includes('dist') || hLow.includes('log')) {
+        return false;
+      }
+    }
+    
+    // User Requested: strict verification check (4 to 6 digits, numeric only, and greater than 1000).
     if (!/^\d{4,6}$/.test(s)) return false; 
     
     const n = parseInt(s);
-    if (n < 1000) return false; // Exclude small integers which are likely indices/flags
+    // Typical Loco IDs are substantial numbers. Frame numbers are usually 1-5000.
+    // If the user said > 1000, we follow but are suspicious of very low values.
+    if (n <= 1000 || n > 999999) return false;
+    
+    // Exclude generic sequences known to be noise
+    if (s === '11111' || s === '99999' || s === '123456' || s === '00000' || s === '0000') return false;
 
     const low = s.toLowerCase();
     return s !== '' && s !== '-' && s !== 'N/A' && s !== 'null' && s !== 'undefined' && 
-           low !== 'loco id' && low !== 'locoid' && low !== 'loco_id' &&
+           !low.includes('packet') && !low.includes('seq') && !low.includes('dist') &&
            s !== '0' && s !== '0.0';
   };
 
@@ -502,39 +489,23 @@ export const processDashboardData = (
   };
 
   const getBestLocoIdFromRow = (row: any, keys: string[], currentDefault: string) => {
-    if (!row) return currentDefault;
-    
-    // Priority 1: Named columns (High Confidence)
-    const namedCandidates = [
-      row[trnLocoIdCol],
-      row[locoIdCol],
-      row[radioLocoIdCol],
-      row['_extractedLocoId']
-    ];
-    for (const val of namedCandidates) {
-      if (isValidLocoId(val)) return String(val).trim();
-    }
-
-    // Priority 2: Traditional indices, but verify headers to avoid distance/packet noise
-    const indices = [8, 34, 17, 33, 4, 10]; // I, AI, R, AH, E, K (deprioritized K)
-    for (const idx of indices) {
-      if (keys && keys[idx]) {
-        const header = String(keys[idx]).toLowerCase();
-        const isLocoHeader = header.includes('loco') || header.includes('engine') || header.includes('id') || header.includes('no');
-        const isSuspicious = header.includes('speed') || header.includes('dist') || header.includes('time') || header.includes('pkt') || header.includes('type');
-        
-        if (isLocoHeader && !isSuspicious) {
-          const val = row[keys[idx]];
-          if (isValidLocoId(val)) return String(val).trim();
-        }
-      }
+    // Defining early so it can be used for global locoId determination
+    const k = Object.keys(row);
+    const lKey = k.find(key => {
+      const low = key.toLowerCase().replace(/\./g, '').replace(/_/g, '').replace(/\s/g, '');
+      return low === 'locoid'; 
+    });
+    if (lKey) {
+      const val = row[lKey];
+      if (isValidLocoId(val, lKey)) return String(val).trim();
     }
     return currentDefault;
   };
 
-  const locoIdCol = findColumn(firstRfAny, 'Loco Id', 'LocoId', 'Loco_Id', 'Loco No', 'LocoNo', 'Loco_No', 'Engine No', 'EngineId', 'Loco', 'Engine') || 'Loco Id';
-  const trnLocoIdCol = findColumn(firstTrn, 'Loco Id', 'LocoId', 'Loco_Id', 'Loco No', 'LocoNo', 'Loco_No', 'Engine No', 'EngineId', 'Loco', 'Engine') || 'Loco Id';
-  const radioLocoIdCol = findColumn(firstRadio, 'Loco Id', 'LocoId', 'Loco_Id', 'Loco No', 'LocoNo', 'Loco_No', 'Engine No', 'EngineId', 'Loco', 'Engine') || 'Loco Id';
+  // Find column names strictly (User Requested: "Loco Id HEADER SE LE")
+  const locoIdCol = findColumn(firstRfAny, 'Loco Id', 'Loco Id.', 'Loco_Id');
+  const trnLocoIdCol = findColumn(firstTrn, 'Loco Id', 'Loco Id.', 'Loco_Id');
+  const radioLocoIdCol = findColumn(firstRadio, 'Loco Id', 'Loco Id.', 'Loco_Id');
   const rfKeys_ = Object.keys(firstRfAny);
   const stnIdCol = findColumn(firstRfAny, 'Station Id', 'StationId', 'Station_Id', 'Station', 'Stn', 'StnId', 'Stn_Id', 'Station Name', 'StationName');
   const stnNameCol = findColumn(firstRfAny, 'Station Name', 'StationName', 'Station_Name', 'StnName', 'Stn Name', 'Station_Name_1');
@@ -777,36 +748,64 @@ export const processDashboardData = (
   let locoId = 'N/A';
   const trnKeys_ = trnData && trnData.length > 0 ? Object.keys(trnData[0]) : [];
   
-  const firstValidRf = rfData.find(r => isValidLocoId(r[locoIdCol] || r['_extractedLocoId']));
+  const firstValidRf = rfData.find(r => {
+    const val = r[locoIdCol];
+    return locoIdCol && isValidLocoId(val, locoIdCol);
+  });
   const firstValidTrn = trnData?.find(r => getBestLocoIdFromRow(r, trnKeys_, 'N/A') !== 'N/A');
-  const firstValidRadio = radioData.find(r => isValidLocoId(r[radioLocoIdCol] || r['_extractedLocoId']));
+  const firstValidRadio = radioData.find(r => {
+    const val = r[radioLocoIdCol];
+    return radioLocoIdCol && isValidLocoId(val, radioLocoIdCol);
+  });
   
-  if (firstValidRf) locoId = String(firstValidRf[locoIdCol] || firstValidRf['_extractedLocoId']).trim();
+  if (firstValidRf) locoId = String(firstValidRf[locoIdCol]).trim();
   else if (firstValidTrn) locoId = getBestLocoIdFromRow(firstValidTrn, trnKeys_, 'N/A');
-  else if (firstValidRadio) locoId = String(firstValidRadio[radioLocoIdCol] || firstValidRadio['_extractedLocoId']).trim();
+  else if (firstValidRadio) locoId = String(firstValidRadio[radioLocoIdCol]).trim();
 
-  const allLocos = new Set<string>();
+  const allLocosCount: Record<string, number> = {};
+  
+  const getLocoFromRowDynamically = (row: any) => {
+    if (!row) return null;
+    const keys = Object.keys(row);
+    // User requested absolute strictness on "Loco Id" header
+    const lKey = keys.find(k => {
+      const low = k.toLowerCase().replace(/\./g, '').replace(/_/g, '').replace(/\s/g, '');
+      return low === 'locoid'; // Strictly 'locoid' only, NO "Frame Num" or others
+    });
+    if (lKey) {
+      const val = row[lKey];
+      if (isValidLocoId(val, lKey)) return String(val).trim();
+    }
+    return null;
+  };
+
   rfData.forEach(row => { 
-    const val = row[locoIdCol] || row['_extractedLocoId'];
-    if (isValidLocoId(val)) allLocos.add(String(val).trim()); 
+    const val = getLocoFromRowDynamically(row);
+    if (val) allLocosCount[val] = (allLocosCount[val] || 0) + 1; 
   });
   trnData?.forEach(row => {
-    const val = getBestLocoIdFromRow(row, trnKeys_, 'N/A');
-    if (isValidLocoId(val)) allLocos.add(val);
+    const val = getLocoFromRowDynamically(row);
+    if (val) allLocosCount[val] = (allLocosCount[val] || 0) + 1;
   });
   rfStData.forEach(row => { 
-    const val = row[locoIdCol] || row['_extractedLocoId'];
-    if (isValidLocoId(val)) allLocos.add(String(val).trim()); 
-  });
-  trnData?.forEach(row => { 
-    const val = row[trnLocoIdCol] || row['_extractedLocoId'];
-    if (isValidLocoId(val)) allLocos.add(String(val).trim()); 
+    const val = getLocoFromRowDynamically(row);
+    if (val) allLocosCount[val] = (allLocosCount[val] || 0) + 1; 
   });
   radioData.forEach(row => { 
-    const val = row[radioLocoIdCol] || row['_extractedLocoId'];
-    if (isValidLocoId(val)) allLocos.add(String(val).trim()); 
+    const val = getLocoFromRowDynamically(row);
+    if (val) allLocosCount[val] = (allLocosCount[val] || 0) + 1; 
   });
-  const locoIds = Array.from(allLocos);
+  
+  // Real locos in a log appear hundreds of times. 
+  // Numbers appearing only a few times are almost certainly transient noise (frame numbers, packet IDs).
+  const locoIds = Object.keys(allLocosCount)
+    .filter(id => allLocosCount[id] > 10) // Significant presence required
+    .sort();
+
+  // If we filtered out the default locoId, pick the most frequent one instead
+  if (!locoIds.includes(locoId) && locoIds.length > 0) {
+    locoId = locoIds.sort((a, b) => allLocosCount[b] - allLocosCount[a])[0];
+  }
 
   // Station Performance & Stats
   const stnGroups: Record<string, { 
@@ -822,10 +821,10 @@ export const processDashboardData = (
   const trnKeys = trnData && trnData.length > 0 ? Object.keys(trnData[0]) : [];
   const trnRadioCol = trnKeys[4] || 'Radio'; // Column E is index 4
   
-  const expectedCol = findColumn(firstRfAny, 'Expected', 'Exp', 'Total', 'Expected Count', 'Exp Count', 'ExpCount') || (rfKeys_.length > 5 ? rfKeys_[5] : 'Expected');
-  const receivedCol = findColumn(firstRfAny, 'Received', 'Rec', 'SuccessCount', 'Recieved Count', 'Rec Count', 'RecCount', 'Success') || (rfKeys_.length > 6 ? rfKeys_[6] : 'Received');
-  const radioCol = findColumn(firstRfAny, 'Radio', 'Modem', 'RadioId', 'Radio_Id', 'ModemId', 'Modem_Id', 'Radio No', 'RadioNo', 'Radio_No') || (rfKeys_.length > 29 ? rfKeys_[29] : 'Radio'); // Column AD is index 29
-  const directionCol = findColumn(firstRfAny, 'Direction', 'Mode', 'Nominal/Reverse', 'Type', 'Nominal_Reverse', 'Dir', 'Nom/Rev', 'Nominal_Rev') || (rfKeys_.length > 4 ? rfKeys_[4] : 'Direction');
+  const expectedCol = findColumn(firstRfAny, 'Expected', 'Exp', 'Total', 'Expected Count', 'Exp Count', 'ExpCount');
+  const receivedCol = findColumn(firstRfAny, 'Received', 'Rec', 'SuccessCount', 'Recieved Count', 'Rec Count', 'RecCount', 'Success');
+  const radioCol = findColumn(firstRfAny, 'Radio', 'Modem', 'RadioId', 'Radio_Id', 'ModemId', 'Modem_Id', 'Radio No', 'RadioNo', 'Radio_No');
+  const directionCol = findColumn(firstRfAny, 'Direction', 'Mode', 'Nominal/Reverse', 'Type', 'Nominal_Reverse', 'Dir', 'Nom/Rev', 'Nominal_Rev');
 
   const seenRfRows = new Set<string>();
   
@@ -874,18 +873,23 @@ export const processDashboardData = (
       return;
     }
     
-    const dCol = findInRow('Direction', 'Mode', 'Nominal/Reverse', 'Type', 'Nominal_Reverse', 'Dir', 'Nom/Rev', 'Nominal_Rev') || (keys.length > 1 ? keys[1] : '');
-    const rawDirection = String(row[dCol] || 'N/A');
+    const dCol = findInRow('Direction', 'Mode', 'Nominal/Reverse', 'Type', 'Nominal_Reverse', 'Dir', 'Nom/Rev', 'Nominal_Rev');
+    const rawDirection = String(dCol ? row[dCol] : 'N/A');
     const direction = rawDirection.toLowerCase().includes('nominal') ? 'Nominal' : 
                       rawDirection.toLowerCase().includes('reverse') ? 'Reverse' : rawDirection;
     
-    const lIdCol = findInRow('Loco Id', 'LocoId', 'Loco_Id', 'Loco No', 'LocoNo', 'Loco_No', 'Engine No', 'EngineId', 'Loco', 'Engine');
-    let rawRowLocoId = (lIdCol ? row[lIdCol] : null);
+    // ABSOLUTE DYNAMIC HEADER LOGIC (User Requested: "ONLY Loco Id HEADER")
+    let rawRowLocoId = getLocoFromRowDynamically(row);
 
-    rawRowLocoId = rawRowLocoId || row['_extractedLocoId'] || locoId;
+    // If no row-level header found, fallback to the first valid global locoId detected during initial pass 
+    // ONLY as a last resort to keep the data associated with a loco.
+    if (!rawRowLocoId && isValidLocoId(locoId)) {
+      rawRowLocoId = locoId;
+    }
     
-    if (!isValidLocoId(rawRowLocoId)) {
-      rawRowLocoId = effectiveSource === 'station' ? 'Station Log' : 'Unknown Loco';
+    // If still nothing, use a generic placeholder to avoid polluting IDs with numeric junk
+    if (!rawRowLocoId || !isValidLocoId(rawRowLocoId)) {
+      rawRowLocoId = effectiveSource === 'station' ? 'Station Log' : 'Unknown';
     }
     
     const rowLocoId = String(rawRowLocoId).trim();
@@ -971,7 +975,10 @@ export const processDashboardData = (
   });
 
   const rawRfLogs = rfData
-    .filter(row => isValidLocoId(row[locoIdCol] || locoId))
+    .filter(row => {
+      const val = row[locoIdCol] || locoId;
+      return isValidLocoId(val, locoIdCol || undefined);
+    })
     .map(row => {
       const direction = String(row[directionCol] || 'N/A');
       const percentage = Number(row[percentageCol]) || 0;
@@ -1100,7 +1107,10 @@ export const processDashboardData = (
       locoDetails: data.locoDetails
     }));
 
-  const rfFiltered = rfData.filter(row => isValidLocoId(row[locoIdCol] || locoId));
+  const rfFiltered = rfData.filter(row => {
+    const val = row[locoIdCol] || locoId;
+    return isValidLocoId(val, locoIdCol || undefined);
+  });
   const totalExp = rfFiltered.reduce((acc, row) => acc + parseNumber(row[expectedCol]), 0);
   const totalRec = rfFiltered.reduce((acc, row) => acc + parseNumber(row[receivedCol]), 0);
   const locoPerformance = totalExp > 0 

@@ -90,7 +90,7 @@ export default function App() {
         setCloudFiles(data.files);
         updateAvailableDatesAndLocos(data.files);
         if (data.warning) {
-          console.warn("AWS Mock Mode:", data.warning);
+          console.warn("DEMO MODE ACTIVE:", data.warning);
         }
       }
     } catch (err) {
@@ -180,18 +180,8 @@ export default function App() {
     return date;
   };
 
-  const extractLocoFromFilename = (filename: string): string | null => {
-    const nameOnly = filename.split('/').pop() || filename;
-    const idMatch = nameOnly.match(/(?:\d{8}_)?([A-Z0-9_\-]{2,15})_(?:RFCOMM|ST|STN|TRNMSNMA|RADIO)/i) || 
-                    nameOnly.match(/(?:\d{8}_)?([A-Z0-9_\-]{2,15})/i);
-    if (idMatch) {
-      let extractedId = idMatch[1];
-      const upperId = extractedId.toUpperCase();
-      if (['RFCOMM', 'STATION', 'TRAIN', 'STN', 'LOCO', 'REPORT', 'LOG', 'TRNMSNMA', 'RADIO', 'ALL'].includes(upperId)) {
-        return null;
-      }
-      return extractedId;
-    }
+   const extractLocoFromFilename = (filename: string): string | null => {
+    // DISABLED: ONLY derive loco from "Loco Id" header in the file content
     return null;
   };
 
