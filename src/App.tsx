@@ -650,13 +650,14 @@ export default function App() {
         const modeRows = filteredStats.modeDegradations.map(d => [
           d.time, 
           formatStationName(d.stationId), 
+          d.direction || 'N/A',
           d.from, 
           d.to, 
           d.reason
         ]);
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Time', 'Station', 'From', 'To', 'Reason']],
+          head: [['Time', 'Station', 'Dir', 'From', 'To', 'Reason']],
           body: modeRows,
           theme: 'striped',
           headStyles: { fillColor: [220, 50, 50] },
@@ -1053,7 +1054,7 @@ export default function App() {
         bodyY = writeText(`3. MODE DEGRADATION AUDIT (TRNMSNMA):`, bodyY, 11, true);
         autoTable(doc, {
           startY: bodyY + 2,
-          head: [['Timestamp', 'Station', 'From', 'To', 'Reason', 'LP Response']],
+          head: [['Timestamp', 'Station', 'Dir', 'From', 'To', 'Reason', 'LP Response']],
           body: filteredStats.modeDegradations.map(d => {
             const fStnId = formatStationName(d.stationId);
             const fStnName = formatStationName(d.stationName);
@@ -1062,6 +1063,7 @@ export default function App() {
             return [
               d.time, 
               `${stnId}${stnName}`.trim(), 
+              d.direction || 'N/A',
               d.from, 
               d.to, 
               d.reason, 
@@ -2183,6 +2185,7 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
               <tr>
                 <th className="pb-3 px-4">Time</th>
                 <th className="pb-3 px-4">Station</th>
+                <th className="pb-3 px-4">Direction</th>
                 <th className="pb-3 px-4">From</th>
                 <th className="pb-3 px-4">To</th>
                 <th className="pb-3 px-4">Reason</th>
@@ -2203,6 +2206,13 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
                       <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-tight">
                         {formatStationName(d.stationName) !== 'N/A' ? formatStationName(d.stationName) : ''}
                       </div>
+                    )}
+                  </td>
+                  <td className="py-3 px-4">
+                    {d.direction && d.direction !== 'N/A' && (
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${d.direction.toLowerCase().includes('nom') ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
+                        {d.direction}
+                      </span>
                     )}
                   </td>
                   <td className="py-3 px-4"><span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-[10px] font-bold">{d.from}</span></td>

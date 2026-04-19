@@ -85,7 +85,7 @@ export interface DashboardStats {
     rowCount: number;
     totalPercSum: number;
   }[];
-  modeDegradations: { time: string; from: string; to: string; reason: string; lpResponse: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  modeDegradations: { time: string; from: string; to: string; reason: string; lpResponse: string; stationId: string; stationName?: string; locoId: string | number; direction?: string; radio?: string }[];
   radioPacketLossEvents: { time: string; stationName: string; reason: string; details: string; locoId: string | number; duration?: number; radio?: string }[];
   shortPackets: { time: string; type: string; length: number; locoId: string | number; radio?: string }[];
   brakeApplications: { time: string; type: string; speed: number; location: string; stationId: string; locoId: string | number; radio?: string }[];

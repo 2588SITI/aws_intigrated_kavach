@@ -710,6 +710,41 @@ export const processDashboardData = (
     return rawTime;
   };
 
+  const getTrnTimestamp = (row: any) => {
+    const timeStr = getTrnTime(row);
+    if (timeStr === 'N/A') return 0;
+    const parts = timeStr.split(' ');
+    if (parts.length === 2) {
+      const dateParts = parts[0].split(/[-/.]/);
+      const timeParts = parts[1].split(':');
+      if (dateParts.length === 3 && timeParts.length >= 2) {
+        let d = parseInt(dateParts[0]);
+        let m = parseInt(dateParts[1]) - 1;
+        let y = parseInt(dateParts[2]);
+
+        // Heuristic to detect YYYY/MM/DD vs DD/MM/YYYY
+        if (d > 31) {
+          // Likely YYYY/MM/DD
+          y = d;
+          // Use regex to get only first 1 or 2 digits in case LocoId is joined to Date
+          const dayMatch = String(dateParts[2]).match(/^\d{1,2}/);
+          d = dayMatch ? parseInt(dayMatch[0]) : parseInt(dateParts[2]);
+        } else if (y < 100) {
+          // Likely DD/MM/YY
+          y = 2000 + y;
+        }
+
+        const hh = parseInt(timeParts[0]);
+        const mm = parseInt(timeParts[1]);
+        const ss = timeParts.length > 2 ? parseInt(timeParts[2]) : 0;
+        const date = new Date(y, m, d, hh, mm, ss);
+        return isNaN(date.getTime()) ? 0 : date.getTime();
+      }
+    }
+    const d = new Date(timeStr);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
   const getRadioTime = (row: any) => {
     let rawTime = String(row[radioTimeCol] || 'N/A');
     const rawDate = String(row._extractedDate || (radioDateCol && row[radioDateCol]) || '').trim();
@@ -724,6 +759,19 @@ export const processDashboardData = (
   const trnDateCol = findColumn(firstTrn, 'Date', 'Log Date', 'LogDate');
   const radioTimeCol = findColumn(firstRadio, 'Time', 'Timestamp', 'Time_DT', 'LogTime') || 'Time';
   const radioDateCol = findColumn(firstRadio, 'Date', 'Log Date', 'LogDate');
+
+  if (trnData) {
+    trnData.sort((a, b) => getTrnTimestamp(a) - getTrnTimestamp(b));
+  }
+  if (radioData) {
+    radioData.sort((a, b) => {
+      const tA = getRadioTime(a);
+      const tB = getRadioTime(b);
+      const tsA = new Date(tA).getTime();
+      const tsB = new Date(tB).getTime();
+      return (isNaN(tsA) ? 0 : tsA) - (isNaN(tsB) ? 0 : tsB);
+    });
+  }
 
   // Find first valid locoId for default
   let locoId = 'N/A';
@@ -1356,30 +1404,64 @@ export const processDashboardData = (
 
   // Mode Degradation
   const modeDegradations: DashboardStats['modeDegradations'] = [];
+  const seenModeEvents = new Set<string>();
   const lastModes: Record<string, string> = {};
   const lastAcks: Record<string, string> = {};
   const lastReasons: Record<string, string> = {};
   const lastNonTripModes: Record<string, string> = {};
   const rowCountPerLoco: Record<string, number> = {};
+  const reachedFSPerLoco: Record<string, boolean> = {};
 
   const modePriority: Record<string, number> = {
     'FS': 5,
+    'LS': 4.5,
     'OS': 4,
     'PS': 3,
     'SR': 2,
     'SH': 1,
+    'ST': 0.5,
     'IS': 0,
     'TR': -1,
-    'Unknown': 10 // High priority to avoid false positives on first row
+    'Unknown': 0,
+    '-': 0,
+    '0': 0
   };
   
+  const trnDirectionCol = findColumn(firstTrn, 'Direction', 'Nominal/Reverse', 'Journey Direction', 'Train Direction', 'Dir', 'Nom/Rev') || trnKeys[21] || 'Direction';
+  const lastRowTimePerLoco: Record<string, number> = {};
+  const lastDirectionPerLoco: Record<string, string> = {};
+
   trnData?.forEach((row, idx) => {
     const trnKeys = Object.keys(row);
     const locoIdVal = getBestLocoIdFromRow(row, trnKeys, locoId);
     if (!isValidLocoId(locoIdVal)) return;
 
+    const rowTime = getTrnTimestamp(row);
+    const lastRowTime = lastRowTimePerLoco[locoIdVal];
+    const currentDirection = String(row[trnDirectionCol] || 'N/A').trim();
+    const lastValidDirection = lastDirectionPerLoco[locoIdVal];
+    
+    // Reset journey/startup:
+    // 1. More than 30 minutes pass between records
+    // 2. OR Direction changed (e.g., Nominal -> Reverse), ignoring N/A gaps
+    const timeGapExceeded = lastRowTime && Math.abs(rowTime - lastRowTime) > 30 * 60 * 1000;
+    const directionChanged = currentDirection !== 'N/A' && lastValidDirection && lastValidDirection !== 'N/A' && currentDirection !== lastValidDirection;
+
+    if (timeGapExceeded || directionChanged) {
+      reachedFSPerLoco[locoIdVal] = false;
+      delete lastModes[locoIdVal];
+      delete lastAcks[locoIdVal];
+      delete lastReasons[locoIdVal];
+      delete lastNonTripModes[locoIdVal];
+    }
+    lastRowTimePerLoco[locoIdVal] = rowTime;
+    if (currentDirection !== 'N/A') {
+      lastDirectionPerLoco[locoIdVal] = currentDirection;
+    }
+
     rowCountPerLoco[locoIdVal] = (rowCountPerLoco[locoIdVal] || 0) + 1;
-    const isStartup = rowCountPerLoco[locoIdVal] <= 15; // First 15 rows are considered startup
+    // USER REQUEST: Startup initialization period is defined as "until FS mode is reached for the first time"
+    const isStartup = !reachedFSPerLoco[locoIdVal];
 
     const rawMode = String(row[modeCol] || '').trim();
     const currentAck = String(row[lpResponseCol] || '').trim();
@@ -1396,10 +1478,17 @@ export const processDashboardData = (
     else if (upperRaw.includes('SIGHT') || upperRaw === 'OS') currentMode = 'OS';
     else if (upperRaw.includes('SHUNT') || upperRaw === 'SH') currentMode = 'SH';
     else if (upperRaw.includes('TRIP') || upperRaw === 'TR') currentMode = 'TR';
+    else if (upperRaw.includes('LIMITED') || upperRaw === 'LS') currentMode = 'LS';
     else if (upperRaw.includes('PARTIAL') || upperRaw === 'PS') currentMode = 'PS';
     else if (upperRaw.includes('ISOLATION') || upperRaw === 'IS') currentMode = 'IS';
+    else if (upperRaw.includes('STANDBY') || upperRaw === 'ST') currentMode = 'ST';
     
     if (currentMode) {
+      // Mark as FS reached if we are in FS mode
+      if (currentMode === 'FS') {
+        reachedFSPerLoco[locoIdVal] = true;
+      }
+      
       const lastMode = lastModes[locoIdVal];
       const lastAck = lastAcks[locoIdVal];
       const lastReason = lastReasons[locoIdVal];
@@ -1407,79 +1496,94 @@ export const processDashboardData = (
 
       const isDegradationMessage = currentAck.toLowerCase().includes('to_sr') || 
                                    currentAck.toLowerCase().includes('to_os') ||
+                                   currentAck.toLowerCase().includes('to_ls') ||
+                                   currentAck.toLowerCase().includes('to_ps') ||
+                                   currentAck.toLowerCase().includes('to_sh') ||
+                                   currentAck.toLowerCase().includes('to_st') ||
                                    currentAck.toLowerCase().includes('degrad');
                                    
       const modeChanged = lastMode && currentMode !== lastMode;
       const ackChanged = lastAck && currentAck !== lastAck;
       const reasonChanged = lastReason && rawReason !== lastReason;
       
-      // If it's the first row, we don't count SR or OS as degradation because it's usually the startup sequence.
-      const isFirstRowDegraded = !lastMode && (currentMode === 'TR' || currentMode === 'IS') && isDegradationMessage;
+      // Extract a meaningful reason first for filtering and inclusion logic
+      let reason = rawReason;
+      if (!reason || reason === 'N/A' || reason === '0') {
+        reason = String(row[eventCol] || '').trim();
+      }
+      if (!reason || reason === 'N/A' || reason === '0') {
+        reason = currentAck || 'Mode Change';
+      }
+
+      // USER REQUEST: Exclude direction information headers from "Mode Degradation Events"
+      const isDirectionHeader = (
+        reason.toLowerCase().includes('nominal') || 
+        reason.toLowerCase().includes('reverse') ||
+        reason.toLowerCase().includes('direction')
+      ) && (
+        reason.toLowerCase().includes('start') ||
+        reason.toLowerCase().includes('journey') ||
+        reason.toLowerCase().includes('header') ||
+        reason.toLowerCase().includes('setting')
+      );
+
+      // USER REQUEST: Include SR, OS, LS, etc. as degradations if reason contains failure keywords, even during startup
+      const startupFailureReason = reason.toLowerCase().includes('radio') || 
+                                   reason.toLowerCase().includes('loss') || 
+                                   reason.toLowerCase().includes('tag') || 
+                                   reason.toLowerCase().includes('degrad') ||
+                                   reason.toLowerCase().includes('fail') ||
+                                   reason.toLowerCase().includes('fault');
+
+      // If it's the first row, we count non-FS modes as degradation if they have failure reasons
+      const isFirstRowDegraded = !lastMode && 
+                                 (currentMode !== 'FS' && currentMode !== 'Unknown' && currentMode !== '-' && currentMode !== '0') && 
+                                 (isDegradationMessage || startupFailureReason);
 
       if (modeChanged || ackChanged || reasonChanged || isFirstRowDegraded) {
-        // A true degradation is moving down the priority hierarchy
-        const lastPrio = lastMode ? (modePriority[lastMode] ?? 5) : (currentMode === 'SR' || currentMode === 'OS' ? 1 : 5);
+        // PRIORITY HIERARCHY: FS(5) > LS(4.5) > OS(4) > PS(3) > SR(2) > SH(1) > IS(0) > TR(-1)
+        const lastPrio = lastMode ? (modePriority[lastMode] ?? 5) : 0;
         const currPrio = modePriority[currentMode] ?? 5;
         
-        const isUpgrade = lastMode && currPrio > lastPrio;
-        const isTrueDegradation = lastMode && currPrio < lastPrio;
+        const isUpgrade = (currPrio > lastPrio);
+        const isTrueDegradation = (currPrio < lastPrio);
         
-        // A true mode degradation is ONLY when it drops FROM FS (5) to something lower,
-        // or from a higher state to a significantly lower state (like OS to TRIP).
-        // Transitions to SR or OS during startup are NOT degradations.
-        const isSignificantDrop = lastMode === 'FS' || (lastPrio > 2 && currPrio <= 1) || currentMode === 'TR';
-        
-        // Or if the Pilot Ack explicitly says "degrad" or the event says so, 
-        // but ONLY if it's NOT an upgrade and NOT the startup sequence
-        const isExplicitDegradation = lastMode && !isUpgrade && (isDegradationMessage || event.includes('degrad'));
+        // Explicit degradation alert: ack message contains "to_sr", "to_os", etc. or event contains "degrad"
+        const isExplicitDegradation = !isUpgrade && (isDegradationMessage || event.includes('degrad'));
                               
-        if ((isTrueDegradation && isSignificantDrop) || (isExplicitDegradation && isSignificantDrop) || isFirstRowDegraded || (currentMode === 'TR' && (ackChanged || reasonChanged))) {
-          // Skip normal startup sequence and minor settling.
-          // Mode Degradation now ONLY shows actual critical drops.
-          
-          // Extract a meaningful reason
-          let reason = rawReason;
-          if (!reason || reason === 'N/A' || reason === '0') {
-            reason = String(row[eventCol] || '').trim();
-          }
-          if (!reason || reason === 'N/A' || reason === '0') {
-            reason = currentAck || 'Mode Change';
-          }
+        const isCriticalFailure = currentMode === 'TR' || currentMode === 'IS';
+        
+        // INCLUSION LOGIC:
+        // 1. Never show upgrades (isUpgrade).
+        // 2. Exclude direction/journey start headers (!isDirectionHeader).
+        // 3. Always show Critical Failures: Trips (TR) or Isolation (IS).
+        // 4. Show mode drops (isTrueDegradation) or explicit alerts (isExplicitDegradation).
+        // 5. Allow these during startup IF they are significant failure reasons (as requested in point 3/5).
+        
+        const shouldInclude = !isUpgrade && !isDirectionHeader && (
+          isCriticalFailure || 
+          isTrueDegradation || 
+          isExplicitDegradation ||
+          isFirstRowDegraded ||
+          (currentMode === 'TR' && (ackChanged || reasonChanged))
+        );
 
-          // But InterTagDistGreaterThanDupTag is NOT a radio packet loss issue
-          const isInterTagDistIssue = reason.toLowerCase().includes('intertagdistgreaterthanduptag') || 
-                                      event.toLowerCase().includes('intertagdistgreaterthanduptag');
-
-          // USER REQUEST: Exclude Radio Packet Loss from Mode Degradation? 
-          // Correction: If it causes a MODE CHANGE, it IS a genuine event. 
-          // We only exclude segments, but here we are in the mode change loop.
-          const isRadioPacketLoss = (reason.toLowerCase().includes('packet loss') || 
-                                    event.includes('packet loss')) && !isInterTagDistIssue;
-
-          // USER REQUEST: SR/OS/FS upgrades are normal "startup" transitions and should be hidden.
-          // BUT: Downward transitions (FS -> OS, FS -> SR, OS -> SR) are GENUINE degradations.
-          const isSROSFS_Upgrade = isUpgrade && 
-                                   (lastMode === 'SR' || lastMode === 'OS') && 
-                                   (currentMode === 'OS' || currentMode === 'FS');
-
-          // USER REQUEST: Exclude SR/OS transitions during startup or settling
-          const isStartupTransition = isStartup && (currentMode === 'SR' || currentMode === 'OS' || currentMode === 'FS');
-          
-          // USER REQUEST: Exclude NoTagMissing during startup or if it's just a status with No_Ack
-          const isNoTagIssue = reason.toLowerCase().includes('notagmissing') && (isStartup || currentAck.toLowerCase().includes('no_ack'));
-
-          // CRITICAL: A "Genuine" degradation is any downward transition not part of the startup sequence.
-          const shouldInclude = currentMode === 'TR' || (!isSROSFS_Upgrade && !isStartupTransition && !isNoTagIssue);
-
-          if (shouldInclude) {
-            const time = getTrnTime(row);
-            // USER REQUEST: Identify the previous mode for the 'From' column.
-            // We look at the last known mode for the SAME locomotive that was NOT 'TR'.
-            // This ensures the transition is correctly attributed to the specific loco's operational state.
-            let fromMode = lastMode || (isDegradationMessage && currentAck.includes('FS_to') ? 'FS' : 'Unknown');
+        if (shouldInclude) {
+          const time = getTrnTime(row);
+            
+            // Deduplication: Avoid exact duplicate events (same time, loco, and transition)
+            let fromMode = lastMode || 'Unknown';
+            if (isDegradationMessage && currentAck.includes('_to_')) {
+              const parts = currentAck.split('_to_');
+              if (parts[0] && parts[0].length <= 3) fromMode = parts[0].toUpperCase();
+            }
             if (currentMode === 'TR' && lastNonTripMode && lastNonTripMode !== 'TR') {
               fromMode = lastNonTripMode;
             }
+
+            const eventKey = `${time}|${locoIdVal}|${fromMode}|${currentMode}|${reason}`;
+            if (seenModeEvents.has(eventKey)) return;
+            seenModeEvents.add(eventKey);
 
             modeDegradations.push({
               time,
@@ -1490,9 +1594,9 @@ export const processDashboardData = (
               stationId: stnId,
               stationName: stnName,
               locoId: locoIdVal,
+              direction: String(row[trnDirectionCol] || 'N/A').trim(),
               radio: String(row[trnRadioCol] || '').trim()
             });
-          }
         }
       }
       lastModes[locoIdVal] = currentMode;
