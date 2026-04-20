@@ -71,6 +71,7 @@ export default function App() {
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [availableLocos, setAvailableLocos] = useState<string[]>([]);
   const [cloudLoco, setCloudLoco] = useState<string>('All');
+  const [division, setDivision] = useState<string>('SC'); // Default to SC
 
   useEffect(() => {
     checkAwsStatus();
@@ -579,66 +580,53 @@ export default function App() {
       }
       
       const doc = new jsPDF();
-      const date = new Date().toLocaleString();
+      const dateStr = new Date().toLocaleString();
 
       // Header
       doc.setFontSize(22);
       doc.setTextColor(0, 102, 204);
-      doc.text('KAVACH EXPERT DIAGNOSTIC REPORT', 105, 20, { align: 'center' });
+      doc.text('KAVACH EXPERT DIAGNOSTIC REPORT', 105, 15, { align: 'center' });
       
-      doc.setFontSize(12);
+      doc.setFontSize(10);
       doc.setTextColor(100);
-      doc.text(`Generated on: ${date}`, 105, 28, { align: 'center' });
-      doc.line(20, 32, 190, 32);
+      doc.text(`Generated on: ${dateStr}`, 105, 22, { align: 'center' });
+      doc.line(20, 25, 190, 25);
 
-      // Loco Info
-      doc.setFontSize(14);
+      // Data Details (User Requested: Division, Date, etc FIRST)
+      doc.setFontSize(12);
       doc.setTextColor(0);
-      doc.text(`Loco ID: ${filteredStats.locoId}`, 20, 45);
-      doc.text(`Mentored by: CELE Sir`, 20, 52);
+      doc.setFont('helvetica', 'bold');
+      doc.text('DATA DETAILS:', 20, 35);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.text(`Division: ${division.toUpperCase()}`, 25, 42);
+      doc.text(`Report Date: ${filteredStats.logDate || stats.logDate || 'All'}`, 25, 47);
+      doc.text(`Loco ID: ${filteredStats.locoId}`, 25, 52);
       if (selectedStation !== 'All') {
-        doc.text(`Filtered Station: ${formatStationName(selectedStation)}`, 20, 59);
+        doc.text(`Filtered Station: ${formatStationName(selectedStation)}`, 25, 57);
       }
 
       // Executive Summary
       doc.setFontSize(16);
       doc.setTextColor(0, 102, 204);
-      doc.text('1. Executive Summary', 20, 75);
+      doc.text('1. Executive Summary', 20, 70);
       doc.setFontSize(11);
       doc.setTextColor(0);
-      doc.text(`Overall Loco Performance: ${filteredStats.locoPerformance.toFixed(2)}%`, 25, 85);
-      doc.text(`NMS Failure Rate: ${filteredStats.nmsFailRate.toFixed(2)}%`, 25, 92);
-      doc.text(`Average MA Refresh Lag: ${filteredStats.avgLag.toFixed(2)}s`, 25, 99);
+      doc.text(`Overall Loco Performance: ${filteredStats.locoPerformance.toFixed(2)}%`, 25, 80);
+      doc.text(`NMS Failure Rate: ${filteredStats.nmsFailRate.toFixed(2)}%`, 25, 87);
+      doc.text(`Average MA Refresh Lag: ${filteredStats.avgLag.toFixed(2)}s`, 25, 94);
 
-      let currentY = 110;
+      let currentY = 105;
 
-      // Tag Issues Table
-      if (filteredStats.tagLinkIssues.length > 0) {
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('2. Critical Tag Link Issues', 20, currentY);
-        
-        const tagRows = filteredStats.tagLinkIssues.map(t => [t.time, formatStationName(t.stationId), t.error, t.info]);
-        autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Time', 'Station ID', 'Error Type', 'Details']],
-          body: tagRows,
-          theme: 'striped',
-          headStyles: { fillColor: [0, 102, 204] },
-          styles: { fontSize: 8 }
-        });
-        currentY = (doc as any).lastAutoTable.finalY + 15;
-      }
-
-      // Mode Degradation Table
+      // Mode Degradation Table (User Requested: SHIFTED TO SECOND POSITION)
       if (filteredStats.modeDegradations.length > 0) {
-        if (currentY > 240) { doc.addPage(); currentY = 20; }
         doc.setFontSize(16);
         doc.setTextColor(0, 102, 204);
-        doc.text('3. Mode Degradation Events', 20, currentY);
+        doc.text('2. Mode Degradation Events', 20, currentY);
         
         const modeRows = filteredStats.modeDegradations.map(d => [
           d.time, 
+          d.locoId,
           formatStationName(d.stationId), 
           d.direction || 'N/A',
           d.from, 
@@ -647,7 +635,7 @@ export default function App() {
         ]);
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Time', 'Station', 'Dir', 'From', 'To', 'Reason']],
+          head: [['Time', 'Loco No', 'Station', 'Dir', 'From', 'To', 'Reason']],
           body: modeRows,
           theme: 'striped',
           headStyles: { fillColor: [220, 50, 50] },
@@ -656,27 +644,47 @@ export default function App() {
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // Brake Applications Table
+      // Brake Applications Table (User Requested: SHIFTED TO THIRD POSITION)
       if (filteredStats.brakeApplications.length > 0) {
         if (currentY > 240) { doc.addPage(); currentY = 20; }
         doc.setFontSize(16);
         doc.setTextColor(0, 102, 204);
-        doc.text('4. Brake Applications by Kavach', 20, currentY);
+        doc.text('3. Brake Applications by Kavach', 20, currentY);
         
         const brakeRows = filteredStats.brakeApplications.map(b => [
           b.time, 
+          b.locoId,
           b.type, 
           `${b.speed} Kmph`, 
-          b.location,
           formatStationName(b.stationId)
         ]);
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Time', 'Type', 'Speed', 'Location', 'Station']],
+          head: [['Time', 'Loco No', 'Type', 'Speed', 'Station']],
           body: brakeRows,
           theme: 'striped',
           headStyles: { fillColor: [245, 158, 11] }, // Amber-500
           styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // Tag Issues Table (User Requested: SHIFTED TO FOURTH POSITION)
+      const tagIssues = filteredStats.tagLinkIssues;
+      if (tagIssues.length > 0) {
+        if (currentY > 240) { doc.addPage(); currentY = 20; }
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('4. Tag Link Issues (Defects Analysis)', 20, currentY);
+        
+        const tagRows = tagIssues.map(t => [t.time, t.locoId, formatStationName(t.stationId), t.error, t.info]);
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Time', 'Loco No', 'Station ID', 'Error Type', 'Details']],
+          body: tagRows,
+          theme: 'striped',
+          headStyles: { fillColor: [0, 102, 204] },
+          styles: { fontSize: 7 }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
@@ -885,9 +893,11 @@ export default function App() {
         doc.setTextColor(0, 102, 204);
         doc.text('7. Moving Radio Loss Analysis (Speed > 0)', 20, currentY);
         
-        doc.setFontSize(10);
+        doc.setFontSize(9);
         doc.setTextColor(80);
-        doc.text('This analysis filters out stationary periods (Speed = 0) to focus on operational signal quality.', 20, currentY + 8);
+        const explanation = 'This analysis identifies radio communication gaps specifically when the locomotive is in motion (Speed > 0). It highlights periods where signal reception failed during operational transit. High gap counts or long durations (Max Gap) indicate critical signal blind spots, antenna hardware faults, or R1/R2 radio switching issues that directly impact safety during movement.';
+        const explanationLines = doc.splitTextToSize(explanation, 170);
+        doc.text(explanationLines, 20, currentY + 8);
         
         const movingRows = filteredStats.movingRadioLoss.map(m => [
           m.locoId,
@@ -899,7 +909,7 @@ export default function App() {
         ]);
         
         autoTable(doc, {
-          startY: currentY + 15,
+          startY: currentY + 8 + (explanationLines.length * 5),
           head: [['Loco ID', 'Moving Gaps', 'Max Gap', 'R1 Usage', 'R2 Usage', 'Conclusion']],
           body: movingRows,
           theme: 'grid',
@@ -947,6 +957,7 @@ export default function App() {
 
       // Meta Info
       doc.setFontSize(10);
+      doc.text(`Division: ${division.toUpperCase()}`, 150, 33);
       doc.text(`Date: ${date}`, 150, 38);
       doc.text(`Time: ${time}`, 150, 43);
       doc.text(`Report ID: ${reportId}`, 20, 38);
@@ -1623,6 +1634,18 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 glass-card rounded-2xl border border-white/5">
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <Database className="w-3 h-3" /> Division
+                  </label>
+                  <input 
+                    type="text"
+                    value={division}
+                    onChange={(e) => setDivision(e.target.value)}
+                    placeholder="SC"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                     <MapPin className="w-3 h-3" /> Station
                   </label>
                   <select 
@@ -2174,6 +2197,7 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
             <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
               <tr>
                 <th className="pb-3 px-4">Time</th>
+                <th className="pb-3 px-4">Loco No</th>
                 <th className="pb-3 px-4">Station</th>
                 <th className="pb-3 px-4">Direction</th>
                 <th className="pb-3 px-4">From</th>
@@ -2186,6 +2210,7 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
               {stats.modeDegradations.length > 0 ? stats.modeDegradations.map((d, i) => (
                 <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                   <td className="py-3 px-4 font-mono text-xs">{d.time}</td>
+                  <td className="py-3 px-4 font-mono text-emerald-400 font-bold">{d.locoId}</td>
                   <td className="py-3 px-4 text-white">
                     {formatStationName(d.stationId) !== 'N/A' && (
                       <div className="font-bold">
@@ -2342,7 +2367,10 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
             {stats.brakeApplications.length > 0 ? stats.brakeApplications.map((b, i) => (
               <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center">
                 <div>
-                  <p className="text-xs font-bold text-white">{b.type}</p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase">Loco {b.locoId}</span>
+                    <p className="text-xs font-bold text-white">{b.type}</p>
+                  </div>
                   <p className="text-[10px] text-slate-500">
                     {b.time} | Loc: {b.location}
                     {formatStationName(b.stationId) !== 'N/A' && (
@@ -2461,15 +2489,15 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
             </h3>
             <div className="flex gap-4">
               <div className="bg-rose-500/10 px-4 py-2 rounded-xl border border-rose-500/20">
-                <p className="text-[10px] text-slate-400 uppercase font-bold">Main Tag Missing</p>
+                <p className="text-[10px] text-slate-400 uppercase font-bold">Both Tags Missing</p>
                 <p className="text-xl font-bold text-rose-400">
-                  {stats.tagLinkIssues.filter(t => t.error === "Main Tag Missing").length}
+                  {stats.tagLinkIssues.filter(t => t.isCritical).length}
                 </p>
               </div>
               <div className="bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20">
-                <p className="text-[10px] text-slate-400 uppercase font-bold">Duplicate Tag Missing</p>
+                <p className="text-[10px] text-slate-400 uppercase font-bold">Single Tag Missing</p>
                 <p className="text-xl font-bold text-amber-400">
-                  {stats.tagLinkIssues.filter(t => t.error === "Duplicate Tag Missing").length}
+                  {stats.tagLinkIssues.filter(t => !t.isCritical).length}
                 </p>
               </div>
             </div>
@@ -2513,31 +2541,32 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
             <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
               <tr>
                 <th className="pb-3 px-4">Time</th>
+                <th className="pb-3 px-4">Loco No</th>
                 <th className="pb-3 px-4">Station ID</th>
-                <th className="pb-3 px-4">Tag Link Info</th>
                 <th className="pb-3 px-4">Diagnostic Error</th>
+                <th className="pb-3 px-4">Tag Link Info</th>
               </tr>
             </thead>
             <tbody className="text-slate-300">
               {filteredTags.length > 0 ? filteredTags.map((t, i) => (
                 <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                   <td className="py-3 px-4 font-mono text-xs">{t.time}</td>
+                  <td className="py-3 px-4 font-mono text-emerald-400 font-bold">{t.locoId}</td>
                   <td className="py-3 px-4 font-bold text-white">
                     {formatStationName(t.stationId)}
                   </td>
-                  <td className="py-3 px-4 text-xs font-mono text-rose-300">{t.info}</td>
                   <td className="py-3 px-4">
                     <span className={cn(
-                      "font-bold",
-                      t.error === "Main Tag Missing" ? "text-rose-400" : 
-                      t.error === "Duplicate Tag Missing" ? "text-amber-400" : "text-rose-400"
+                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                      t.isCritical ? "bg-rose-500 text-white" : "bg-amber-500/20 text-amber-400"
                     )}>
                       {t.error}
                     </span>
                   </td>
+                  <td className="py-3 px-4 text-xs font-mono text-slate-500">{t.info}</td>
                 </tr>
               )) : (
-                <tr><td colSpan={4} className="py-8 text-center text-slate-500">No matching tag issues found.</td></tr>
+                <tr><td colSpan={5} className="py-8 text-center text-slate-500">No matching tag issues found.</td></tr>
               )}
             </tbody>
           </table>

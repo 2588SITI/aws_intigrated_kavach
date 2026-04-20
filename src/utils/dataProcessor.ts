@@ -599,10 +599,18 @@ export const processDashboardData = (
     if (!d || d === 'Unknown' || d === 'N/A') return 'Unknown';
     const parts = d.split(/[-/.]/);
     if (parts.length === 3) {
-      const day = parts[0].padStart(2, '0');
-      const month = parts[1].padStart(2, '0');
-      let year = parts[2];
-      if (year.length === 2) year = `20${year}`;
+      let day, month, year;
+      // Determine if Year is at the start (4 digits) or end
+      if (parts[0].length === 4) {
+        year = parts[0];
+        month = parts[1].padStart(2, '0');
+        day = parts[2].padStart(2, '0');
+      } else {
+        day = parts[0].padStart(2, '0');
+        month = parts[1].padStart(2, '0');
+        year = parts[2];
+        if (year.length === 2) year = `20${year}`;
+      }
       return `${day}/${month}/${year}`;
     }
     return d;
@@ -1208,8 +1216,13 @@ export const processDashboardData = (
       seenRadioTagIssues.add(key);
 
       let errorType = "Potential Medha Kavach Reporting Issue";
-      if (info.toLowerCase().includes('maintagmissing')) errorType = "Main Tag Missing";
-      if (info.toLowerCase().includes('duplicatetagmissing')) errorType = "Duplicate Tag Missing";
+      const hLow = info.toLowerCase();
+      const isMain = hLow.includes('maintagmissing');
+      const isDup = hLow.includes('duplicatetagmissing');
+      
+      if (isMain && isDup) errorType = "Both Tags Missing (Critical)";
+      else if (isMain) errorType = "Main Tag Missing (Non-Critical)";
+      else if (isDup) errorType = "Duplicate Tag Missing (Non-Critical)";
       
       radioTagIssues.push({
         time: time,
@@ -1217,7 +1230,8 @@ export const processDashboardData = (
         info: String(p[tagLinkCol]),
         error: errorType,
         locoId: lId,
-        radio: String(p[radioRadioCol] || '').trim()
+        radio: String(p[radioRadioCol] || '').trim(),
+        isCritical: isMain && isDup
       });
     }
   });
@@ -1261,8 +1275,13 @@ export const processDashboardData = (
         seenTrnTagIssues.add(key);
 
         let errorType = "Potential Medha Kavach Reporting Issue";
-        if (info.includes('maintagmissing')) errorType = "Main Tag Missing";
-        if (info.includes('duplicatetagmissing')) errorType = "Duplicate Tag Missing";
+        const hLow = info.toLowerCase();
+        const isMain = hLow.includes('maintagmissing');
+        const isDup = hLow.includes('duplicatetagmissing');
+
+        if (isMain && isDup) errorType = "Both Tags Missing (Critical)";
+        else if (isMain) errorType = "Main Tag Missing (Non-Critical)";
+        else if (isDup) errorType = "Duplicate Tag Missing (Non-Critical)";
 
         trnTagIssues.push({
           time: time,
@@ -1270,13 +1289,19 @@ export const processDashboardData = (
           info: String(row[trnTagLinkCol]),
           error: errorType,
           locoId: lId,
-          radio: String(row[trnRadioCol] || '').trim()
+          radio: String(row[trnRadioCol] || '').trim(),
+          isCritical: isMain && isDup
         });
       }
     });
   }
 
-  const tagLinkIssues = [...radioTagIssues, ...trnTagIssues].sort((a, b) => a.time.localeCompare(b.time));
+  const initialTagLinkIssues = [...radioTagIssues, ...trnTagIssues].sort((a, b) => a.time.localeCompare(b.time));
+  
+  // USER REQUEST: Filter tag missing events.
+  // Only take events that caused mode degradation or brake application (or other safety reasons)
+  // We'll perform this filtering after we have collected all degradations and brakes.
+  const tagLinkIssuesUnfiltered = initialTagLinkIssues;
 
   // NMS Logic
   const nmsHealthCol = findColumn(firstTrn, 'NMS Health', 'NMSHealth', 'Health') || 'NMS Health';
@@ -1545,18 +1570,19 @@ export const processDashboardData = (
                                    reason.toLowerCase().includes('fail') ||
                                    reason.toLowerCase().includes('fault');
 
+      // PRIORITY HIERARCHY: FS(5) > LS(4.5) > OS(4) > PS(3) > SR(2) > SH(1) > IS(0) > TR(-1)
+      const lastPrio = lastMode ? (modePriority[lastMode] ?? 5) : 0;
+      const currPrio = modePriority[currentMode] ?? 5;
+      
+      const isUpgrade = (currPrio > lastPrio);
+      const isTrueDegradation = (currPrio < lastPrio);
+
       // If it's the first row, we count non-FS modes as degradation if they have failure reasons
       const isFirstRowDegraded = !lastMode && 
                                  (currentMode !== 'FS' && currentMode !== 'Unknown' && currentMode !== '-' && currentMode !== '0') && 
                                  (isDegradationMessage || startupFailureReason);
 
-      if (modeChanged || ackChanged || reasonChanged || isFirstRowDegraded) {
-        // PRIORITY HIERARCHY: FS(5) > LS(4.5) > OS(4) > PS(3) > SR(2) > SH(1) > IS(0) > TR(-1)
-        const lastPrio = lastMode ? (modePriority[lastMode] ?? 5) : 0;
-        const currPrio = modePriority[currentMode] ?? 5;
-        
-        const isUpgrade = (currPrio > lastPrio);
-        const isTrueDegradation = (currPrio < lastPrio);
+      if (modeChanged || ((ackChanged || reasonChanged) && isTrueDegradation) || isFirstRowDegraded) {
         
         // Explicit degradation alert: ack message contains "to_sr", "to_os", etc. or event contains "degrad"
         const isExplicitDegradation = !isUpgrade && (isDegradationMessage || event.includes('degrad'));
@@ -1567,15 +1593,14 @@ export const processDashboardData = (
         // 1. Never show upgrades (isUpgrade).
         // 2. Exclude direction/journey start headers (!isDirectionHeader).
         // 3. Always show Critical Failures: Trips (TR) or Isolation (IS).
-        // 4. Show mode drops (isTrueDegradation) or explicit alerts (isExplicitDegradation).
-        // 5. Allow these during startup IF they are significant failure reasons (as requested in point 3/5).
+        // 4. Show mode drops (isTrueDegradation).
+        // 5. USER REQUEST: If mode is same as last one, do NOT repeat even if reason/ack changed (deduplicate identical consecutive modes)
         
         const shouldInclude = !isUpgrade && !isDirectionHeader && (
           isCriticalFailure || 
-          isTrueDegradation || 
-          isExplicitDegradation ||
-          isFirstRowDegraded ||
-          (currentMode === 'TR' && (ackChanged || reasonChanged))
+          (isTrueDegradation && modeChanged) || 
+          (isExplicitDegradation && modeChanged) ||
+          isFirstRowDegraded
         );
 
         if (shouldInclude) {
@@ -1949,6 +1974,26 @@ export const processDashboardData = (
   });
 
   const modeDegradationsToUse = finalModeDegradations;
+
+  // USER REQUEST: Filter tag link issues based on safety impact (Brakes or Mode Degradations)
+  const tagLinkIssues = tagLinkIssuesUnfiltered.filter(tag => {
+    const tagTime = parseTime(tag.time);
+    if (isNaN(tagTime)) return false;
+
+    // Check for mode degradations within 30 seconds after the tag issue
+    const causedDegradation = modeDegradationsToUse.some(deg => {
+      const degTime = parseTime(deg.time);
+      return !isNaN(degTime) && degTime >= tagTime && degTime <= tagTime + 30000;
+    });
+
+    // Check for brake applications within 30 seconds after the tag issue
+    const causedBrake = brakeApplications.some(brake => {
+      const bTime = parseTime(brake.time);
+      return !isNaN(bTime) && bTime >= tagTime && bTime <= tagTime + 30000;
+    });
+
+    return causedDegradation || causedBrake;
+  });
 
   const avgLag = maPacketsProcessed.length > 0
     ? maPacketsProcessed.reduce((a, b) => a + b.delay, 0) / maPacketsProcessed.length

@@ -93,7 +93,7 @@ export interface DashboardStats {
   sosEvents: { time: string; source: string; type: string; stationId: string; locoId: string | number; radio?: string }[];
   trainConfigChanges: { time: string; parameter: string; oldVal: string; newVal: string; stationId: string; locoId: string | number; radio?: string }[];
   uniqueTrainLengths: { length: number; time: string; stationId: string; locoId: string | number; radio?: string }[];
-  tagLinkIssues: { time: string; stationId: string; info: string; error: string; locoId: string | number; radio?: string }[];
+  tagLinkIssues: { time: string; stationId: string; info: string; error: string; locoId: string | number; radio?: string; isCritical?: boolean }[];
   multiLocoBadStns: { 
     stationId: string | number; 
     locoCount: number; 
