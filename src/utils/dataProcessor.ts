@@ -1208,13 +1208,8 @@ export const processDashboardData = (
       seenRadioTagIssues.add(key);
 
       let errorType = "Potential Medha Kavach Reporting Issue";
-      const hLow = info.toLowerCase();
-      const isMain = hLow.includes('maintagmissing');
-      const isDup = hLow.includes('duplicatetagmissing');
-      
-      if (isMain && isDup) errorType = "Both Tags Missing (Critical)";
-      else if (isMain) errorType = "Main Tag Missing (Non-Critical)";
-      else if (isDup) errorType = "Duplicate Tag Missing (Non-Critical)";
+      if (info.toLowerCase().includes('maintagmissing')) errorType = "Main Tag Missing";
+      if (info.toLowerCase().includes('duplicatetagmissing')) errorType = "Duplicate Tag Missing";
       
       radioTagIssues.push({
         time: time,
@@ -1222,8 +1217,7 @@ export const processDashboardData = (
         info: String(p[tagLinkCol]),
         error: errorType,
         locoId: lId,
-        radio: String(p[radioRadioCol] || '').trim(),
-        isCritical: isMain && isDup
+        radio: String(p[radioRadioCol] || '').trim()
       });
     }
   });
@@ -1267,13 +1261,8 @@ export const processDashboardData = (
         seenTrnTagIssues.add(key);
 
         let errorType = "Potential Medha Kavach Reporting Issue";
-        const hLow = info.toLowerCase();
-        const isMain = hLow.includes('maintagmissing');
-        const isDup = hLow.includes('duplicatetagmissing');
-
-        if (isMain && isDup) errorType = "Both Tags Missing (Critical)";
-        else if (isMain) errorType = "Main Tag Missing (Non-Critical)";
-        else if (isDup) errorType = "Duplicate Tag Missing (Non-Critical)";
+        if (info.includes('maintagmissing')) errorType = "Main Tag Missing";
+        if (info.includes('duplicatetagmissing')) errorType = "Duplicate Tag Missing";
 
         trnTagIssues.push({
           time: time,
@@ -1281,8 +1270,7 @@ export const processDashboardData = (
           info: String(row[trnTagLinkCol]),
           error: errorType,
           locoId: lId,
-          radio: String(row[trnRadioCol] || '').trim(),
-          isCritical: isMain && isDup
+          radio: String(row[trnRadioCol] || '').trim()
         });
       }
     });
