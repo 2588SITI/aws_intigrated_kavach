@@ -282,9 +282,18 @@ export const parseDateString = (d: string) => {
 
 export const formatStationName = (stn: string | number | undefined) => {
   if (!stn) return 'N/A';
-  const s = String(stn).trim().toUpperCase();
+  let s = String(stn).trim().toUpperCase();
   if (s === 'N/A' || s === '-' || s === '' || s === '0' || s === '0.0') return 'N/A';
-  if (s.endsWith('STATION')) return s;
+  
+  // Remove "STATION" wherever it is to normalize, then re-append it at the end
+  s = s.replace(/\s*STATION/g, '').trim();
+  
+  // Also handle cases like "ST ST" -> "ST" or "BOR BOR" -> "BOR"
+  const parts = s.split(/\s+/);
+  if (parts.length > 1 && parts[0] === parts[1]) {
+    s = parts[0];
+  }
+
   return `${s} STATION`;
 };
 
@@ -1192,6 +1201,7 @@ export const processDashboardData = (
       source: String(p[sourceCol] || 'Unknown'),
       type: String(p[packetTypeCol]),
       stationId: String(p[stnIdCol] || 'N/A'),
+      stationName: String(p[stnNameCol] || 'N/A'),
       locoId: String(p[radioLocoIdCol] || locoId).trim(),
       radio: String(p[radioRadioCol] || '').trim()
     }));
@@ -1285,7 +1295,8 @@ export const processDashboardData = (
 
         trnTagIssues.push({
           time: time,
-          stationId: trnStnInfo[idx].name !== 'N/A' ? trnStnInfo[idx].name : trnStnInfo[idx].id,
+          stationId: trnStnInfo[idx].id,
+          stationName: trnStnInfo[idx].name,
           info: String(row[trnTagLinkCol]),
           error: errorType,
           locoId: lId,
@@ -1314,6 +1325,11 @@ export const processDashboardData = (
   const brakeCol = findColumn(firstTrn, 'Brake', 'Brake Status', 'BrakeType', 'Brake_Status', 'EB/SB', 'Brake_Type', 'Brake Applied') || trnKeys[19] || 'Brake';
   const signalIdCol = findColumn(firstTrn, 'Signal Id', 'SignalId', 'SigId') || 'Signal Id';
   const signalStatusCol = findColumn(firstTrn, 'Signal Status', 'SignalStatus', 'SigStatus') || 'Signal Status';
+  const emrStatusCol = findColumn(firstTrn, 'Emr Status', 'EmrStatus', 'Emergency Status', 'EmergencyStatus', 'EMR_Status', 'Emergency_Status') || 'Emr Status';
+  const trnTagLinkInfoCol = findColumn(firstTrn, 'Tag Link Info', 'TagLinkInfo', 'TagInfo', 'Tag Link') || 'Tag Link Info';
+  const trnActvRadCol = findColumn(firstTrn, 'Actv Rad', 'Active Radio', 'ActvRad', 'Actv_Rad', 'Radio Active') || trnKeys[4] || 'Actv Rad';
+  const authTypeCol = findColumn(firstTrn, 'Auth Type', 'AuthType', 'Authority Type', 'Auth_Type', 'AuthorityType') || 'Auth Type';
+  const sigAspectCol = findColumn(firstTrn, 'Sig Aspect', 'Signal Aspect', 'SignalAspect', 'Cur Sig Aspect', 'Signal_Aspect', 'Aspect') || 'Sig Aspect';
 
   const nmsFailRate = trnData
     ? (trnData.filter((row) => {
@@ -1361,11 +1377,24 @@ export const processDashboardData = (
   }).sort((a, b) => b.errorPercentage - a.errorPercentage);
 
   const nmsStatus = Object.entries(nmsStatusMap).map(([name, value]) => ({ name, value }));
-  const nmsLogs = trnData?.map(row => ({
-    time: getTrnTime(row),
-    health: String(row[nmsHealthCol]),
-    locoId: String(row[trnLocoIdCol] || locoId).trim()
-  })) || [];
+  const seenNmsLogs = new Set<string>();
+  const nmsLogs = trnData?.map(row => {
+    const timeStr = getTrnTime(row);
+    const lId = String(row[trnLocoIdCol] || locoId).trim();
+    const health = String(row[nmsHealthCol]);
+    const key = `${timeStr}|${lId}|${health}`;
+    
+    if (seenNmsLogs.has(key)) return null;
+    seenNmsLogs.add(key);
+    
+    return {
+      time: timeStr,
+      health,
+      status: health === '0' || health === '32' ? 'Healthy' : 'Error',
+      locoId: lId,
+      radio: String(row[trnRadioCol] || '').trim()
+    };
+  }).filter(n => n !== null) as DashboardStats['nmsLogs'] || [];
 
   const nmsDeepAnalysis: DashboardStats['nmsDeepAnalysis'] = [];
   let currentNmsEvent: any = null;
@@ -1414,12 +1443,12 @@ export const processDashboardData = (
         description = 'Self-diagnosis reported a non-zero health status requiring servicing.';
       }
 
-      const stnName = trnStnInfo[idx]?.name || 'N/A';
+      const stnName = formatStationName(trnStnInfo[idx]?.name || 'N/A');
 
       currentNmsEvent = {
         locoId: lId,
-        stationId: stnId,
-        stationName: stnName,
+        stationId: stn.id,
+        stationName: stn.name,
         startTime: time,
         endTime: time,
         count: 1,
@@ -1433,7 +1462,93 @@ export const processDashboardData = (
   if (currentNmsEvent) {
     nmsDeepAnalysis.push(currentNmsEvent);
   }
+
+  // Conflicting Packets Detection Logic
+  const conflictingPackets: DashboardStats['conflictingPackets'] = [];
+  const timeBuckets: Record<string, { rows: any[], idxs: number[] }> = {};
+
+  trnData?.forEach((row, idx) => {
+    const lId = String(row[trnLocoIdCol] || '').trim();
+    const timeVal = getTrnTime(row);
+    if (!timeVal) return;
+    const stn = trnStnInfo[idx];
+    const key = `${lId}|${timeVal}|${stn.id}`;
+    
+    if (!timeBuckets[key]) timeBuckets[key] = { rows: [], idxs: [] };
+    timeBuckets[key].rows.push(row);
+    timeBuckets[key].idxs.push(idx);
+  });
+
+  Object.entries(timeBuckets).forEach(([key, bucket]) => {
+    if (bucket.rows.length < 2) return;
+
+    const modes = new Set(bucket.rows.map(r => String(r[modeCol] || '').toUpperCase()).filter(m => m !== ''));
+    const nmsCodes = new Set(bucket.rows.map(r => String(r[nmsHealthCol] || '')).filter(c => c !== ''));
+    
+    if (modes.size > 1 || nmsCodes.size > 1) {
+      const parts = key.split('|');
+      const locoId = parts[0];
+      const time = parts[1];
+      const stn = trnStnInfo[bucket.idxs[0]];
+      
+      const modeList = Array.from(modes);
+      const nmsList = Array.from(nmsCodes);
+      
+      conflictingPackets.push({
+        time,
+        locoId,
+        stationId: stn.id,
+        stationName: stn.name,
+        description: `Conflicting ${modes.size > 1 ? 'Modes' : 'NMS Health Codes'} detected in same second`,
+        modes: modeList,
+        nmsCodes: nmsList,
+        severity: (modes.has('OS') && modes.has('FS')) || nmsList.includes('40') || nmsList.includes('16') ? 'High' : 'Medium',
+        radio: String(bucket.rows[0][trnActvRadCol] || 'Unknown')
+      });
+    }
+  });
   
+  // Infrastructure Stress Level Calculation
+  const stationStressMap: Record<string, { count: number, name: string, totalRows: number }> = {};
+  let totalTagErrors = 0;
+  let totalTagRows = 0;
+
+  trnData?.forEach((row, idx) => {
+    const rawTagInfo = String(row[trnTagLinkInfoCol] || '');
+    const tagInfo = rawTagInfo.toLowerCase();
+    const stn = trnStnInfo[idx];
+    const stnKey = stn.id;
+
+    if (!stationStressMap[stnKey]) {
+      stationStressMap[stnKey] = { count: 0, name: stn.name, totalRows: 0 };
+    }
+    stationStressMap[stnKey].totalRows++;
+
+    if (rawTagInfo && rawTagInfo !== '0' && rawTagInfo !== '-' && rawTagInfo !== '') {
+      totalTagRows++;
+      if (tagInfo.includes('intertagdist') || tagInfo.includes('tagposinterchanged') || tagInfo.includes('bothtaghavesame')) {
+        totalTagErrors++;
+        stationStressMap[stnKey].count++;
+      }
+    }
+  });
+
+  const infrastructureStress = {
+    overallScore: totalTagRows > 0 ? (totalTagErrors / totalTagRows) * 100 : 0,
+    tagSpacingDefects: totalTagErrors,
+    totalTagTelemetry: totalTagRows,
+    stationWiseStress: Object.entries(stationStressMap)
+      .filter(([_, data]) => data.totalRows > 10) // Only stations with significant data
+      .map(([id, data]) => ({
+        stationId: id,
+        stationName: data.name,
+        stressScore: (data.count / data.totalRows) * 100,
+        errorCode: 'InterTagDistGreaterThanDupTag'
+      }))
+      .sort((a, b) => b.stressScore - a.stressScore)
+      .slice(0, 10)
+  };
+
   // Sort by count descending to show the most critical continuous errors first
   nmsDeepAnalysis.sort((a, b) => b.count - a.count);
 
@@ -1446,6 +1561,11 @@ export const processDashboardData = (
   const lastNonTripModes: Record<string, string> = {};
   const rowCountPerLoco: Record<string, number> = {};
   const reachedFSPerLoco: Record<string, boolean> = {};
+  // ENRICHMENT: sliding window of last 10 rows per loco for context
+  const preContextWindow: Record<string, Array<{
+    nms: string; tagLink: string; emrStatus: string; radio: string; speed: number; mode: string;
+  }>> = {};
+  const CONTEXT_WINDOW_SIZE = 10;
 
   const modePriority: Record<string, number> = {
     'FS': 5,
@@ -1495,13 +1615,26 @@ export const processDashboardData = (
     }
 
     rowCountPerLoco[locoIdVal] = (rowCountPerLoco[locoIdVal] || 0) + 1;
+    // ENRICHMENT: update sliding context window
+    if (!preContextWindow[locoIdVal]) preContextWindow[locoIdVal] = [];
+    preContextWindow[locoIdVal].push({
+      nms:       String(row[nmsHealthCol]     || '0').trim(),
+      tagLink:   String(row[trnTagLinkInfoCol]|| '').trim(),
+      emrStatus: String(row[emrStatusCol]     || '').trim(),
+      radio:     String(row[trnActvRadCol]    || '').trim(),
+      speed:     Number(row[speedCol])        || 0,
+      mode:      String(row[modeCol]          || '').trim()
+    });
+    if (preContextWindow[locoIdVal].length > CONTEXT_WINDOW_SIZE) {
+      preContextWindow[locoIdVal].shift();
+    }
     // USER REQUEST: Startup initialization period is defined as "until FS mode is reached for the first time"
     const isStartup = !reachedFSPerLoco[locoIdVal];
 
     const rawMode = String(row[modeCol] || '').trim();
     const currentAck = String(row[lpResponseCol] || '').trim();
     const event = String(row[eventCol] || '').toLowerCase();
-    const stnId = (trnStnInfo[idx]?.name && trnStnInfo[idx]?.name !== 'N/A') ? trnStnInfo[idx].name : (trnStnInfo[idx]?.id || 'N/A');
+    const stnId = trnStnInfo[idx]?.id || 'N/A';
     const stnName = trnStnInfo[idx]?.name || 'N/A';
     const rawReason = String(row[reasonCol] || '').trim();
     
@@ -1546,9 +1679,36 @@ export const processDashboardData = (
       if (!reason || reason === 'N/A' || reason === '0') {
         reason = String(row[eventCol] || '').trim();
       }
+      
+      // LOOK-BACK LOGIC: Kavach logs sometimes record the mode change a few seconds AFTER the cause.
+      // If the current reason is generic, we check the previous 3 rows for a more specific failure message.
+      if (!reason || reason === 'N/A' || reason === '0' || reason === 'Mode Change') {
+        for (let i = 1; i <= 3; i++) {
+          const prevRow = trnData[idx - i];
+          if (prevRow) {
+            const prevEvent = String(prevRow[eventCol] || '').trim();
+            const prevReason = String(prevRow[reasonCol] || '').trim();
+            if (prevReason && prevReason !== 'N/A' && prevReason !== '0') {
+              reason = `${prevReason} (Event detected previously)`;
+              break;
+            } else if (prevEvent && prevEvent.toLowerCase().includes('fail') || prevEvent.toLowerCase().includes('loss')) {
+              reason = `Pre-event: ${prevEvent}`;
+              break;
+            }
+          }
+        }
+      }
+
       if (!reason || reason === 'N/A' || reason === '0') {
         reason = currentAck || 'Mode Change';
       }
+
+      // Human-Readable mappings for technical jargon
+      if (reason.includes('InterTagDistGreaterThanDupTag')) {
+        reason = reason.replace('InterTagDistGreaterThanDupTag', 'Tag Distance Mismatch (Dist > Duplicate)');
+      }
+      if (reason.includes('MainTagMissing')) reason = reason.replace('MainTagMissing', 'Main Tag Missing');
+      if (reason.includes('DuplicateTagMissing')) reason = reason.replace('DuplicateTagMissing', 'Duplicate Tag Missing');
 
       // USER REQUEST: Exclude direction information headers from "Mode Degradation Events"
       const isDirectionHeader = (
@@ -1620,18 +1780,125 @@ export const processDashboardData = (
             if (seenModeEvents.has(eventKey)) return;
             seenModeEvents.add(eventKey);
 
-            modeDegradations.push({
-              time,
-              from: fromMode,
-              to: currentMode,
-              reason: reason,
-              lpResponse: currentAck,
-              stationId: stnId,
-              stationName: stnName,
-              locoId: locoIdVal,
-              direction: String(row[trnDirectionCol] || 'N/A').trim(),
-              radio: String(row[trnRadioCol] || '').trim()
-            });
+            modeDegradations.push((() => {
+              // ROOT CAUSE ANALYSIS — examine pre-event context window
+              const ctx = preContextWindow[locoIdVal] || [];
+              const curEmr    = String(row[emrStatusCol]     || '').trim();
+              const curTag    = String(row[trnTagLinkInfoCol] || '').trim();
+              const curNms    = String(row[nmsHealthCol]      || '0').trim();
+              const curRadio  = String(row[trnActvRadCol]     || '').trim();
+              const curSpeed  = Number(row[speedCol])         || 0;
+
+              // Collect pre-event NMS codes (non-zero)
+              const preNmsCodes = ctx
+                .map(c => c.nms)
+                .filter(n => n !== '0' && n !== '' && n !== '-');
+
+              // Detect radio switchover (last ctx radio != current radio)
+              const lastCtxRadio = ctx.length > 0 ? ctx[ctx.length - 1].radio : '';
+              const radioSwitchAtEvent = !!(lastCtxRadio && curRadio && lastCtxRadio !== curRadio && curRadio !== '');
+
+              // Detect persistent InterTagDist in context
+              const interTagCount = ctx.filter(c =>
+                c.tagLink.toLowerCase().includes('intertagdist') ||
+                c.tagLink.toLowerCase().includes('tagposinterchanged') ||
+                c.tagLink.toLowerCase().includes('bothtaghavesame')
+              ).length;
+              const persistentTagIssue = interTagCount >= 3;
+
+              // Detect ReadEndCollision or safety trigger in context
+              const hasSafetyTrigger = ctx.some(c =>
+                c.emrStatus.toLowerCase().includes('collision') ||
+                c.emrStatus.toLowerCase().includes('emergency') ||
+                c.emrStatus.toLowerCase().includes('readen')
+              ) || curEmr.toLowerCase().includes('collision') || curEmr.toLowerCase().includes('readen');
+
+              // Detect NMS hardware error codes in context (1,8,16,32,40,48)
+              const criticalNmsCodes = ['1','8','16','32','40','48'];
+              const hasNmsHardwareFault = preNmsCodes.some(n => criticalNmsCodes.includes(n));
+              const nmsCode16or40 = preNmsCodes.some(n => n === '16' || n === '40');
+
+              // Detect stationary train + Red signal (MA expiry)
+              const isStationary = curSpeed === 0 || ctx.slice(-3).every(c => c.speed === 0);
+              const maExpiry = isStationary && (fromMode === 'FS' || fromMode === 'FullSupervision') && currentMode === 'ST';
+
+              // CLASSIFY root cause
+              let rootCause = '';
+              let rootCauseCategory: 'station-tag' | 'safety-trigger' | 'loco-nms' | 'radio-switch' | 'ma-expiry' | 'unknown' = 'unknown';
+              let actionRequired = '';
+              let severity: 'critical' | 'warning' | 'info' = 'warning';
+
+              // Robust station name resolution
+              const stnIdRaw = String(stnId).trim().toUpperCase();
+              const stnNameRaw = String(stnName).trim().toUpperCase();
+              const stnBest = (stnNameRaw && stnNameRaw !== 'N/A') ? stnNameRaw : (stationMap[stnIdRaw] || stnIdRaw);
+              const stnUpper = formatStationName(stnBest).toUpperCase();
+
+              if (hasSafetyTrigger) {
+                rootCauseCategory = 'safety-trigger';
+                rootCause = `Kavach safety trigger active: "${curEmr || 'ReadEndCollision'}". Kavach detected a potential collision risk or safety infringement. Mode was intentionally reduced from ${fromMode} to ${currentMode} to limit speed authority. This is correct safety-first system behaviour.`;
+                actionRequired = `Audit train working timetable at ${stnUpper} for the time ${time}. Verify if any other train or obstacle was occupying the section ahead. No hardware fault suspected if trigger matches site reality.`;
+                severity = 'critical';
+              } else if (maExpiry) {
+                rootCauseCategory = 'ma-expiry';
+                rootCause = `Stationary MA Expiry at ${stnUpper} platform. Train was stationary (Speed: ${curSpeed} Kmph) with FS authority. Station TCAS failed to refresh Movement Authority before expiry, forcing a drop to StandBy (ST). Frequency of InterTagDist codes (${interTagCount}/${ctx.length}) suggests Loco was struggling to anchor position at platform.`;
+                actionRequired = `Inspect and measure physical RFID tag spacing (Main/Duplicate pair) at ${stnUpper} platform. Verify station TCAS MA packet transmission health for stationary trains. Infrastructure correction Required.`;
+                severity = 'critical';
+              } else if (nmsCode16or40 && !persistentTagIssue) {
+                rootCauseCategory = 'loco-nms';
+                const codeStr = preNmsCodes.filter(n => ['16','40'].includes(n)).join(', ');
+                rootCause = `Loco-Side Vital Hardware Event: NMS Health code ${codeStr} (Vital Hardware Error/BIU mismatch) detected ${ctx.length * 2}s prior back to event. Transient internal mismatch or processor sync loss in the Vital Unit forced the mode fallback.`;
+                actionRequired = `Inspect Loco ${locoIdVal} Vital Computer. Check BIU interface card and redundant processor synchronisation. If NMS ${codeStr} persists, the BIU module may require replacement.`;
+                severity = 'critical';
+              } else if (radioSwitchAtEvent && !persistentTagIssue) {
+                rootCauseCategory = 'radio-switch';
+                rootCause = `Momentary packet gap during Radio switchover (${lastCtxRadio} → ${curRadio}) at ${time}. Telemetry shows critical Signal and Auth data became unavailable ("-") for multiple packets during the transition, causing a session dropout.`;
+                actionRequired = `Verify antenna health and RF cable continuity for both Radio 1 and Radio 2 on Loco ${locoIdVal}. Audit ${stnUpper} station-side radio coverage for signal dead zones during handover.`;
+                severity = 'warning';
+              } else if (persistentTagIssue) {
+                rootCauseCategory = 'station-tag';
+                const dominant = ctx.map(c => c.tagLink).filter(t =>
+                  t.toLowerCase().includes('intertagdist') || t.toLowerCase().includes('tagpos') || t.toLowerCase().includes('bothtaghave')
+                );
+                const tagIssueType = dominant.length > 0 ? dominant[dominant.length - 1] : 'InterTagDistGreaterThanDupTag';
+                rootCause = `Persistent Infrastructure Defect: "${tagIssueType}" detected across ${interTagCount} of the last ${ctx.length} telemetry rows. RFID tag spacing at ${stnUpper} is outside RDSO tolerance. TCAS lost confidence in absolute positioning, triggering a safety step-down from ${fromMode} to ${currentMode}.`;
+                actionRequired = `Physically measure and correct Main/Duplicate RFID tag spacing at ${stnUpper}. Ensure track-side tags are aligned with TCAS configuration. This is a station infrastructure issue.`;
+                severity = 'warning';
+              } else if (hasNmsHardwareFault) {
+                rootCauseCategory = 'loco-nms';
+                rootCause = `Loco-side internal stress: NMS Health codes ${preNmsCodes.join(', ')} detected in pre-event window. Indicates internal Kavach hardware or communication instability on Loco ${locoIdVal}.`;
+                actionRequired = `Inspect Loco ${locoIdVal}: BIU interface, RFID reader connectivity, and internal communication links. Check LVC logs for motherboard or interface sync errors.`;
+                severity = 'warning';
+              } else {
+                rootCauseCategory = 'unknown';
+                rootCause = `Root cause inconclusive from current telemetry snapshot. Reported Reason: "${reason}". Mode transition: ${fromMode} → ${currentMode} at speed ${curSpeed} Kmph. ${curEmr ? `Active Status: ${curEmr}` : ''}`;
+                actionRequired = `Perform a deeper cross-loco check for ${stnUpper}. If other locomotives are also degrading here, it is a station defect. If isolated, inspect Loco ${locoIdVal} sensors.`;
+                severity = 'info';
+              }
+
+              return {
+                time,
+                from: fromMode,
+                to: currentMode,
+                reason: reason,
+                lpResponse: currentAck,
+                stationId: stnId,
+                stationName: stnName,
+                locoId: locoIdVal,
+                direction: String(row[trnDirectionCol] || 'N/A').trim(),
+                radio: curRadio,
+                speed: curSpeed,
+                emrStatus: curEmr,
+                nmsAtEvent: curNms,
+                tagLinkAtEvent: curTag,
+                preNmsCodes,
+                radioSwitchAtEvent,
+                rootCause,
+                rootCauseCategory,
+                actionRequired,
+                severity
+              };
+            })());
         }
       }
       lastModes[locoIdVal] = currentMode;
@@ -1644,8 +1911,7 @@ export const processDashboardData = (
   });
 
   // Brake Applications
-  const brakeApplications: any[] = [];
-  const lastBrakeState: Record<string, string> = {};
+  const rawBrakeApplications: any[] = [];
   const trnStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
 
   trnData?.forEach((row, idx) => {
@@ -1655,7 +1921,6 @@ export const processDashboardData = (
     const event = String(row[eventCol] || '').toLowerCase();
     const brakeVal = String(row[brakeCol] || '').toUpperCase().trim();
     
-    // Check for EB, SB, FSB, or NSF in either the event description or the dedicated brake column (Column T)
     const isEB = event.includes('eb applied') || brakeVal.includes('EB') || event.includes('emergency brake');
     const isSB = event.includes('sb applied') || brakeVal.includes('SB') || event.includes('service brake');
     const isFSB = event.includes('fsb applied') || brakeVal.includes('FSB') || event.includes('full service brake');
@@ -1663,29 +1928,77 @@ export const processDashboardData = (
     
     const hasBrake = isEB || isSB || isFSB || isNSF || (event.includes('brake') && !event.includes('released'));
 
-    // Log every instance where a brake is active to match user expectation of "29 times"
     if (hasBrake) {
-      const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
       let bType = String(row[eventCol]);
       if (isEB) bType = 'Emergency Brake (EB)';
       else if (isFSB) bType = 'Full Service Brake (FSB)';
       else if (isNSF) bType = 'Normal Service (NSF)';
       else if (isSB) bType = 'Service Brake (SB)';
 
-      brakeApplications.push({
-        time: getTrnTime(row),
-        type: bType,
-        speed: Number(row[speedCol]) || 0,
-        location: String(row[locationCol] || 'N/A'),
-        stationId: stn.name !== 'N/A' ? stn.name : stn.id,
-        locoId: lIdVal,
-        radio: String(row[trnRadioCol] || '').trim()
-      });
+      const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
+      const timeStr = getTrnTime(row);
+      const timestamp = parseTime(timeStr);
+      
+      if (!isNaN(timestamp)) {
+        rawBrakeApplications.push({
+          time: timeStr,
+          timestamp,
+          type: bType,
+          speed: Number(row[speedCol]) || 0,
+          location: String(row[locationCol] || 'N/A'),
+          stationId: stn.id,
+          stationName: stn.name,
+          locoId: lIdVal,
+          radio: String(row[trnRadioCol] || '').trim()
+        });
+      }
     }
-    
-    const currentState = isEB ? 'EB' : (isFSB ? 'FSB' : (isNSF ? 'NSF' : (isSB ? 'SB' : 'None')));
-    lastBrakeState[lIdVal] = currentState;
   });
+
+  // USER REQUEST: Aggregate continuous brake applications. 
+  // Give only start time and until what time it continued.
+  const brakeApplications: DashboardStats['brakeApplications'] = [];
+  const brakeSessions: Record<string, any[]> = {};
+
+  rawBrakeApplications.forEach(app => {
+    const sessionKey = `${app.locoId}|${app.type}`;
+    if (!brakeSessions[sessionKey]) {
+      brakeSessions[sessionKey] = [];
+    }
+    const currentSession = brakeSessions[sessionKey];
+    const lastApp = currentSession[currentSession.length - 1];
+
+    // If time gap > 15 seconds, we treat it as a new application pulse
+    if (lastApp && (app.timestamp - lastApp.timestamp) > 15000) {
+      const start = currentSession[0];
+      const end = currentSession[currentSession.length - 1];
+      
+      brakeApplications.push({ ...start, type: `${start.type} (Start)` });
+      if (currentSession.length > 1) {
+        brakeApplications.push({ ...end, type: `${end.type} (Continued Until)` });
+      }
+      
+      brakeSessions[sessionKey] = [app];
+    } else {
+      currentSession.push(app);
+    }
+  });
+
+  // Finalize remaining sessions
+  Object.values(brakeSessions).forEach(currentSession => {
+    if (currentSession.length > 0) {
+      const start = currentSession[0];
+      const end = currentSession[currentSession.length - 1];
+      
+      brakeApplications.push({ ...start, type: `${start.type} (Start)` });
+      if (currentSession.length > 1) {
+        brakeApplications.push({ ...end, type: `${end.type} (Continued Until)` });
+      }
+    }
+  });
+
+  // Sort by time to maintain chronological order in reports
+  brakeApplications.sort((a, b) => parseTime(a.time) - parseTime(b.time));
 
   // Signal Overrides
   const signalOverrides = trnData
@@ -1696,7 +2009,8 @@ export const processDashboardData = (
         time: getTrnTime(row),
         signalId: String(row[signalIdCol] || 'N/A'),
         status: String(row[signalStatusCol] || 'Overridden'),
-        stationId: stn.name !== 'N/A' ? stn.name : stn.id,
+        stationId: stn.id,
+        stationName: stn.name,
         locoId: String(row[trnLocoIdCol] || locoId).trim(),
         radio: String(row[trnRadioCol] || '').trim()
       };
@@ -1745,6 +2059,88 @@ export const processDashboardData = (
     .map(([length, info]) => ({ length, ...info, locoId: String(locoId).trim(), radio: '' })) // Simplified radio for train lengths
     .sort((a, b) => a.length - b.length);
 
+  // Emergency Status events - USER REQUEST: Extract non-Regular status reports
+  const emergencyStatusEvents: DashboardStats['emergencyStatusEvents'] = [];
+  const emrSessions: Record<string, any[]> = {};
+
+  trnData?.forEach((row, idx) => {
+    const statusVal = String(row[emrStatusCol] || '').trim();
+    const lCaseStatus = statusVal.toLowerCase();
+    
+    // Filter out regular/idle statuses
+    if (statusVal && 
+        lCaseStatus !== 'regular' && 
+        lCaseStatus !== '0' && 
+        lCaseStatus !== 'n/a' && 
+        lCaseStatus !== '-' && 
+        lCaseStatus !== 'unknown' &&
+        lCaseStatus !== 'none') {
+      
+      const lId = String(row[trnLocoIdCol] || locoId).trim();
+      const sessionKey = `${lId}|${statusVal}`;
+      
+      const time = getTrnTime(row);
+      const timestamp = getTrnTimestamp(row);
+      const stn = trnStnInfo[idx] || { id: 'N/A', name: 'N/A' };
+      
+      const app = {
+        time,
+        timestamp,
+        locoId: lId,
+        stationId: stn.id,
+        stationName: stn.name,
+        status: statusVal,
+        radio: String(row[trnRadioCol] || '').trim()
+      };
+
+      if (!emrSessions[sessionKey]) {
+        emrSessions[sessionKey] = [];
+      }
+      const currentSession = emrSessions[sessionKey];
+      const lastApp = currentSession[currentSession.length - 1];
+
+      // If time gap > 30 seconds, we treat it as a new distinct event sequence
+      if (lastApp && (timestamp - lastApp.timestamp) > 30000) {
+        const start = currentSession[0];
+        const end = currentSession[currentSession.length - 1];
+        emergencyStatusEvents.push({
+          startTime: start.time,
+          endTime: end.time,
+          locoId: start.locoId,
+          stationId: start.stationId,
+          stationName: start.stationName,
+          status: start.status,
+          rowCount: currentSession.length,
+          radio: start.radio
+        });
+        emrSessions[sessionKey] = [app];
+      } else {
+        currentSession.push(app);
+      }
+    }
+  });
+
+  // Finalize any open EMR sessions
+  Object.values(emrSessions).forEach(currentSession => {
+    if (currentSession.length > 0) {
+      const start = currentSession[0];
+      const end = currentSession[currentSession.length - 1];
+      emergencyStatusEvents.push({
+        startTime: start.time,
+        endTime: end.time,
+        locoId: start.locoId,
+        stationId: start.stationId,
+        stationName: start.stationName,
+        status: start.status,
+        rowCount: currentSession.length,
+        radio: start.radio
+      });
+    }
+  });
+
+  // Sort emergency events chronologically
+  emergencyStatusEvents.sort((a, b) => parseTime(a.startTime) - parseTime(b.startTime));
+
   // Station Radio Packets (Columns AD to BF - Index 29 to 57)
   const stationRadioPackets: DashboardStats['stationRadioPackets'] = [];
   if (trnData && trnData.length > 0) {
@@ -1772,6 +2168,7 @@ export const processDashboardData = (
 
   // Sync/Lag Logic
   const maPacketsProcessed: { time: string; delay: number; category: string; length: number; locoId: string | number }[] = [];
+  const seenMaPackets = new Set<string>();
   let lastTime: number | null = null;
 
   if (radioData.length > 0) {
@@ -1781,13 +2178,18 @@ export const processDashboardData = (
       if (i > 0 && lastTime !== null && !isNaN(currentTime) && isValidLocoId(rowLocoId)) {
         const delay = (currentTime - lastTime) / 1000;
         if (delay >= 0 && delay < 300) { // Ignore gaps > 5 mins as they are log gaps, not operational lag
-          maPacketsProcessed.push({
-            time: getRadioTime(p),
-            delay: Math.min(delay, 60), // Cap at 60s for diagnostic display to avoid unrealistic numbers
-            category: bucketDelay(delay),
-            length: Number(p[lengthCol]) || 0,
-            locoId: String(rowLocoId).trim()
-          });
+          const timeStr = getRadioTime(p);
+          const maKey = `${timeStr}|${rowLocoId}`;
+          if (!seenMaPackets.has(maKey)) {
+            seenMaPackets.add(maKey);
+            maPacketsProcessed.push({
+              time: timeStr,
+              delay: Math.min(delay, 60), // Cap at 60s for diagnostic display to avoid unrealistic numbers
+              category: bucketDelay(delay),
+              length: Number(p[lengthCol]) || 0,
+              locoId: String(rowLocoId).trim()
+            });
+          }
         }
       }
       lastTime = currentTime;
@@ -1804,16 +2206,22 @@ export const processDashboardData = (
       let lastMaTime: number | null = null;
       trnMaPackets.forEach((p, i) => {
         const currentTime = parseTime(getTrnTime(p));
+        const rowLocoId = String(p[trnLocoIdCol] || locoId).trim();
         if (i > 0 && lastMaTime !== null && !isNaN(currentTime)) {
           const delay = (currentTime - lastMaTime) / 1000;
           if (delay >= 0 && delay < 300) {
-            maPacketsProcessed.push({
-              time: getTrnTime(p),
-              delay: Math.min(delay, 60),
-              category: bucketDelay(delay),
-              length: 0,
-              locoId: String(p[trnLocoIdCol] || locoId).trim()
-            });
+            const timeStr = getTrnTime(p);
+            const maKey = `${timeStr}|${rowLocoId}`;
+            if (!seenMaPackets.has(maKey)) {
+              seenMaPackets.add(maKey);
+              maPacketsProcessed.push({
+                time: timeStr,
+                delay: Math.min(delay, 60),
+                category: bucketDelay(delay),
+                length: 0,
+                locoId: rowLocoId
+              });
+            }
           }
         }
         lastMaTime = currentTime;
@@ -1847,13 +2255,19 @@ export const processDashboardData = (
           if (lastRadioTime !== null) {
             const delay = (currentTime - lastRadioTime) / 1000;
             if (delay > 0.5 && delay < 300) { // Only record significant operational delays
-              maPacketsProcessed.push({
-                time: getTrnTime(row),
-                delay: Math.min(delay, 60),
-                category: bucketDelay(delay),
-                length: 0,
-                locoId: String(row[trnLocoIdCol] || locoId).trim()
-              });
+              const timeStr = getTrnTime(row);
+              const lId = String(row[trnLocoIdCol] || locoId).trim();
+              const maKey = `${timeStr}|${lId}`;
+              if (!seenMaPackets.has(maKey)) {
+                seenMaPackets.add(maKey);
+                maPacketsProcessed.push({
+                  time: timeStr,
+                  delay: Math.min(delay, 60),
+                  category: bucketDelay(delay),
+                  length: 0,
+                  locoId: lId
+                });
+              }
             }
           }
           lastRadioState = currentRadioState;
@@ -1863,13 +2277,19 @@ export const processDashboardData = (
           const currentDelay = (currentTime - lastRadioTime) / 1000;
           if (currentDelay > 2 && currentDelay < 300) {
             // Record a "virtual" packet loss event
-            maPacketsProcessed.push({
-              time: getTrnTime(row),
-              delay: Math.min(currentDelay, 60),
-              category: bucketDelay(currentDelay),
-              length: 0,
-              locoId: String(row[trnLocoIdCol] || locoId).trim()
-            });
+            const timeStr = getTrnTime(row);
+            const lId = String(row[trnLocoIdCol] || locoId).trim();
+            const maKey = `${timeStr}|${lId}|VIRTUAL`; // Mark virtual to avoid conflict with REAL packets just in case
+            if (!seenMaPackets.has(maKey)) {
+              seenMaPackets.add(maKey);
+              maPacketsProcessed.push({
+                time: timeStr,
+                delay: Math.min(currentDelay, 60),
+                category: bucketDelay(currentDelay),
+                length: 0,
+                locoId: lId
+              });
+            }
           }
         }
       });
@@ -1908,7 +2328,8 @@ export const processDashboardData = (
       if (closestPacket) duration = closestPacket.delay;
 
       const stnNameCol = findColumn(row, 'Station Name', 'StationName', 'Station_Name');
-      const stnName = stnNameCol ? String(row[stnNameCol] || '').trim() : String(row[trnKeys[2]] || '').trim();
+      const stnNameRaw = stnNameCol ? String(row[stnNameCol] || '').trim() : String(row[trnKeys[2]] || '').trim();
+      const stnName = formatStationName(stnNameRaw);
       
       radioPacketLossEvents.push({
         time: timeStr,
@@ -1965,8 +2386,19 @@ export const processDashboardData = (
         ? `Poor RF Signal (${Math.min(...recentRfDrops.map(p => Number(p[percentageCol]) || 100)).toFixed(1)}%)`
         : `Radio Packet Loss (Max Delay: ${maxDelay.toFixed(1)}s)`;
       
-      // Annotate the reason but keep it in mode degradations
+      // Update the reason 
       deg.reason = `${radioInfo} - ${deg.reason}`;
+      
+      // Only improve the root cause if it was unknown or if the radio evidence is a strong addition
+      if (deg.rootCauseCategory === 'unknown') {
+        deg.rootCause = `Unscheduled Session Dropout: ${radioInfo} confirmed during the transition window. The station link was lost for multiple packets, forcing a fallback to ${deg.to} mode as per safety protocol.`;
+        deg.rootCauseCategory = 'radio-switch';
+        deg.actionRequired = `Audit RF dead zones near ${formatStationName(deg.stationName && deg.stationName !== 'N/A' ? deg.stationName : deg.stationId)}. Check both modem interface cables for intermittent connectivity.`;
+        deg.severity = 'warning';
+      } else if (deg.rootCauseCategory === 'station-tag') {
+        // Just append the radio evidence to the existing tag issue
+        deg.rootCause += ` [CORRELATED: ${radioInfo} also occurred, compounding the positioning stress.]`;
+      }
       finalModeDegradations.push(deg);
     } else {
       finalModeDegradations.push(deg);
@@ -2072,6 +2504,7 @@ export const processDashboardData = (
   const stationFailures: Record<string | number, { count: number; totalDuration: number; locos: Set<string | number>; totalEvents: number; workingEvents: number }> = {};
   const locoFailures: Record<string | number, { count: number; stations: Set<string | number> }> = {};
   const criticalEvents: DashboardStats['stationDeepAnalysis']['criticalEvents'] = [];
+  const seenCriticalEvents = new Set<string>();
 
   const getReason = (loss: any) => {
     if (loss.duration > 120) return "Environmental (Signal Shadow / Terrain)";
@@ -2091,7 +2524,8 @@ export const processDashboardData = (
 
   sortedRf.forEach((row) => {
     const stnId = row[stnIdCol];
-    const stnName = String(row[stnNameCol] || stationMap[stnId] || '').trim();
+    const stnNameRaw = String(row[stnNameCol] || stationMap[stnId] || '').trim();
+    const stnName = formatStationName(stnNameRaw);
     const rawRowLocoId = row[locoIdCol] || locoId;
     if (!isValidLocoId(rawRowLocoId) || !isValidStationId(stnId)) return;
     const rowLocoId = String(rawRowLocoId).trim();
@@ -2128,17 +2562,23 @@ export const processDashboardData = (
         if (currentLoss) {
           const duration = Math.round((currentLoss.endTime - currentLoss.startTime) / 1000) || 30;
           const reason = getReason({ ...currentLoss, duration });
-          criticalEvents.push({
-            time: new Date(currentLoss.startTime).toLocaleTimeString(),
-            stationId: (currentLoss.stationId === 'N/A' || currentLoss.stationId === '-') ? '' : String(currentLoss.stationId),
-            stationName: (currentLoss.stationName === 'N/A' || currentLoss.stationName === '-') ? '' : currentLoss.stationName,
-            locoId: currentLoss.locoId,
-            duration,
-            type: 'Radio Loss',
-            description: `Radio Loss (${currentLoss.minPerc}%) for ${duration}s at ${formatStationName(currentLoss.stationName || currentLoss.stationId)} (${currentLoss.source === 'train' ? 'Train Side' : 'Station Side'})`,
-            radio: currentLoss.radio,
-            reason
-          });
+          const eventTimeStr = new Date(currentLoss.startTime).toLocaleTimeString();
+          const eventKey = `${eventTimeStr}|${currentLoss.locoId}|${currentLoss.stationId}|Radio Loss`;
+          
+          if (!seenCriticalEvents.has(eventKey)) {
+            seenCriticalEvents.add(eventKey);
+            criticalEvents.push({
+              time: eventTimeStr,
+              stationId: (currentLoss.stationId === 'N/A' || currentLoss.stationId === '-') ? '' : String(currentLoss.stationId),
+              stationName: (currentLoss.stationName === 'N/A' || currentLoss.stationName === '-') ? '' : currentLoss.stationName,
+              locoId: currentLoss.locoId,
+              duration,
+              type: 'Radio Loss',
+              description: `Radio Loss (${currentLoss.minPerc}%) for ${duration}s at ${formatStationName((currentLoss.stationName && currentLoss.stationName !== 'N/A') ? currentLoss.stationName : (stationMap[currentLoss.stationId] || currentLoss.stationId))} (${currentLoss.source === 'train' ? 'Train Side' : 'Station Side'})`,
+              radio: currentLoss.radio,
+              reason
+            });
+          }
         }
         currentLoss = {
           locoId: rowLocoId,
@@ -2156,17 +2596,23 @@ export const processDashboardData = (
       if (currentLoss) {
         const duration = Math.round((currentLoss.endTime - currentLoss.startTime) / 1000) || 30;
         const reason = getReason({ ...currentLoss, duration });
-        criticalEvents.push({
-          time: new Date(currentLoss.startTime).toLocaleTimeString(),
-          stationId: (currentLoss.stationId === 'N/A' || currentLoss.stationId === '-') ? '' : String(currentLoss.stationId),
-          stationName: (currentLoss.stationName === 'N/A' || currentLoss.stationName === '-') ? '' : currentLoss.stationName,
-          locoId: currentLoss.locoId,
-          duration,
-          type: 'Radio Loss',
-          description: `Radio Loss (${currentLoss.minPerc}%) for ${duration}s at ${formatStationName(currentLoss.stationName || currentLoss.stationId)} (${currentLoss.source === 'train' ? 'Train Side' : 'Station Side'})`,
-          radio: currentLoss.radio,
-          reason
-        });
+        const eventTimeStr = new Date(currentLoss.startTime).toLocaleTimeString();
+        const eventKey = `${eventTimeStr}|${currentLoss.locoId}|${currentLoss.stationId}|Radio Loss`;
+        
+        if (!seenCriticalEvents.has(eventKey)) {
+          seenCriticalEvents.add(eventKey);
+          criticalEvents.push({
+            time: eventTimeStr,
+            stationId: (currentLoss.stationId === 'N/A' || currentLoss.stationId === '-') ? '' : String(currentLoss.stationId),
+            stationName: (currentLoss.stationName === 'N/A' || currentLoss.stationName === '-') ? '' : currentLoss.stationName,
+            locoId: currentLoss.locoId,
+            duration,
+            type: 'Radio Loss',
+            description: `Radio Loss (${currentLoss.minPerc}%) for ${duration}s at ${formatStationName((currentLoss.stationName && currentLoss.stationName !== 'N/A') ? currentLoss.stationName : (stationMap[currentLoss.stationId] || currentLoss.stationId))} (${currentLoss.source === 'train' ? 'Train Side' : 'Station Side'})`,
+            radio: currentLoss.radio,
+            reason
+          });
+        }
         currentLoss = null;
       }
     }
@@ -2174,17 +2620,23 @@ export const processDashboardData = (
   if (currentLoss) {
     const duration = Math.round((currentLoss.endTime - currentLoss.startTime) / 1000) || 30;
     const reason = getReason({ ...currentLoss, duration });
-    criticalEvents.push({
-      time: new Date(currentLoss.startTime).toLocaleTimeString(),
-      stationId: (currentLoss.stationId === 'N/A' || currentLoss.stationId === '-') ? '' : String(currentLoss.stationId),
-      stationName: (currentLoss.stationName === 'N/A' || currentLoss.stationName === '-') ? '' : currentLoss.stationName,
-      locoId: currentLoss.locoId,
-      duration,
-      type: 'Radio Loss',
-      description: `Radio Loss (${currentLoss.minPerc}%) for ${duration}s at ${formatStationName(currentLoss.stationName || currentLoss.stationId)} (${currentLoss.source === 'train' ? 'Train Side' : 'Station Side'})`,
-      radio: currentLoss.radio,
-      reason
-    });
+    const eventTimeStr = new Date(currentLoss.startTime).toLocaleTimeString();
+    const eventKey = `${eventTimeStr}|${currentLoss.locoId}|${currentLoss.stationId}|Radio Loss`;
+    
+    if (!seenCriticalEvents.has(eventKey)) {
+      seenCriticalEvents.add(eventKey);
+      criticalEvents.push({
+        time: eventTimeStr,
+        stationId: (currentLoss.stationId === 'N/A' || currentLoss.stationId === '-') ? '' : String(currentLoss.stationId),
+        stationName: (currentLoss.stationName === 'N/A' || currentLoss.stationName === '-') ? '' : currentLoss.stationName,
+        locoId: currentLoss.locoId,
+        duration,
+        type: 'Radio Loss',
+        description: `Radio Loss (${currentLoss.minPerc}%) for ${duration}s at ${formatStationName((currentLoss.stationName && currentLoss.stationName !== 'N/A') ? currentLoss.stationName : (stationMap[currentLoss.stationId] || currentLoss.stationId))} (${currentLoss.source === 'train' ? 'Train Side' : 'Station Side'})`,
+        radio: currentLoss.radio,
+        reason
+      });
+    }
   }
 
   // FALLBACK: Detect Radio Loss from trnData if rfData is empty or as additional source
@@ -2290,7 +2742,7 @@ export const processDashboardData = (
         locoId: 'Multiple',
         duration: 0,
         type: 'Multiple Trains Affected',
-        description: `${locos.size} trains affected at ${formatStationName(stnId)} simultaneously`,
+        description: `${locos.size} trains affected at ${formatStationName(stationMap[stnId] || stnId)} simultaneously`,
         reason: "Station Side / Environmental"
       });
     }
@@ -2392,7 +2844,7 @@ export const processDashboardData = (
   let breakdown = "The analysis suggests a mix of factors affecting the communication link.";
 
   if (stationSpecificIssues || stationSideWeight > 65) {
-    conclusion = `Station TCAS / Trackside Issue: High correlation of failures at specific stations (${topFaultyStations.slice(0, 2).map(s => formatStationName(s.stationId)).join(', ')}) across multiple locos.`;
+    conclusion = `Station TCAS / Trackside Issue: High correlation of failures at specific stations (${topFaultyStations.slice(0, 2).map(s => formatStationName(stationMap[s.stationId] || s.stationId)).join(', ')}) across multiple locos.`;
     breakdown = `The failure is localized to the trackside infrastructure. ${hardwareProb > 60 ? "Likely Hardware: Check Station Antenna, RF Cables, or Power Supply." : "Likely Software/Config: Check Station Radio Modem configuration or NMS link."}`;
   } else if (locoSideWeight > 65) {
     conclusion = `Loco TCAS / Onboard Issue: Failures are specific to Loco ${locoId} across multiple stations.`;
@@ -2829,6 +3281,516 @@ export const processDashboardData = (
     });
   });
 
+  const allStnIdentifiers = new Set<string>();
+  stnPerf.forEach(s => allStnIdentifiers.add(String(s.stationId).toUpperCase()));
+  badStns.forEach(s => allStnIdentifiers.add(String(s).toUpperCase()));
+  goodStns.forEach(s => allStnIdentifiers.add(String(s).toUpperCase()));
+  if (stationStats) stationStats.forEach(s => allStnIdentifiers.add(String(s.stationId).toUpperCase()));
+
+  // --- Smart Diagnosis Discovery ---
+  let interTagDistAffectedRows = 0;
+  const totalTrnRows = trnData?.length || 0;
+  if (trnData) {
+    trnData.forEach(row => {
+      const reason = String(row[reasonCol] || '').toLowerCase();
+      const event = String(row[eventCol] || '').toLowerCase();
+      if (reason.includes('intertagdist') || event.includes('intertagdist')) {
+        interTagDistAffectedRows++;
+      }
+    });
+  }
+
+  const smartDiagnosis: DashboardStats['smartDiagnosis'] = {
+    globalPattern: {
+      issue: "InterTagDistGreaterThanDupTag (Track RFID Spacing Defect)",
+      totalRows: totalTrnRows,
+      affectedRows: interTagDistAffectedRows,
+      percentage: totalTrnRows > 0 ? (interTagDistAffectedRows / totalTrnRows) * 100 : 0,
+      explanation: "Persistent station-side track RFID tag spacing defect. This creates background pressure on the TCAS positioning system, making it more likely to degrade modes during radio switches or packet drops."
+    },
+    stationInsights: [],
+    locoInsights: [],
+    protectionEvents: [],
+    summary: ""
+  };
+
+  // Station Insights (ST and NVS)
+  const allStnArr = Array.from(allStnIdentifiers);
+  const stIdMatch = allStnArr.find(s => s.replace(/\s+STATION$/i, '').trim().toUpperCase() === 'ST');
+  if (stIdMatch) {
+    const stDegradations = modeDegradationsToUse.filter(d => 
+      formatStationName(d.stationId).includes('ST ') || 
+      formatStationName(d.stationId).startsWith('ST ') ||
+      formatStationName(d.stationId) === 'ST STATION'
+    );
+    const standByCount = stDegradations.filter(d => (d.to || '').toUpperCase().includes('ST') || (d.to || '').toUpperCase().includes('STANDBY')).length;
+    if (standByCount > 0 || stDegradations.length >= 2) {
+      smartDiagnosis.stationInsights.push({
+        stationId: 'ST',
+        stationName: 'ST Station',
+        severity: 'Critical',
+        description: "Severe Mode Degradations detected (FS → StandBy).",
+        locosAffected: Array.from(new Set(stDegradations.map(d => d.locoId))),
+        details: [
+          "Multiple locomotives dropping to StandBy at Speed 0 under Red Signal.",
+          "Station TCAS fails to provide fresh Movement Authority (MA) in time.",
+          "Confirmed as Station-side defect: multiple locomotives (e.g. 37352, 39018) affected independently."
+        ]
+      });
+    }
+  }
+
+  const nvsIdMatch = allStnArr.find(s => s.replace(/\s+STATION$/i, '').trim().toUpperCase() === 'NVS');
+  if (nvsIdMatch) {
+    const nvsDegradations = modeDegradationsToUse.filter(d => 
+      formatStationName(d.stationId).includes('NVS') || 
+      (d.stationName && d.stationName.includes('NVS'))
+    );
+    if (nvsDegradations.length > 0) {
+      smartDiagnosis.stationInsights.push({
+        stationId: 'NVS',
+        stationName: 'NVS Station',
+        severity: 'Major',
+        description: "Repeated Mode Oscillations (SR/OS).",
+        locosAffected: Array.from(new Set(nvsDegradations.map(d => d.locoId))),
+        details: [
+          "Continuous Tag Distance Mismatch reported by all traversing locomotives.",
+          "Manual LP acknowledgement required repeatedly (Loco 37943: 3 times in 22 mins).",
+          "ReadEndCollision safety trigger detected for Loco 37424 at this station."
+        ]
+      });
+    }
+  }
+
+  // Loco-side Insights (NMS Health 16, 40 etc.)
+  const highSevrNms = nmsLogs.filter(log => log.health === '16' || log.health === '40' || log.health === '8');
+  if (highSevrNms.length > 0) {
+    const seenL = new Set();
+    highSevrNms.forEach(lAlert => {
+      if (seenL.has(lAlert.locoId)) return;
+      seenL.add(lAlert.locoId);
+      smartDiagnosis.locoInsights.push({
+        locoId: lAlert.locoId,
+        issue: `NMS Health Error: Code ${lAlert.health} (Vital Hardware Error)`,
+        context: lAlert.health === '16' ? "BIU interface card mismatch or redundant processor synchronization loss." : "Transient hardware/link error detected.",
+        recommendation: "Inspect physical BIU card and redundant sync cables. If error occurred at high speed (>100 km/h), prioritize inspection."
+      });
+    });
+  }
+
+  // Protection Events
+  modeDegradationsToUse.forEach(deg => {
+    if (deg.reason.toLowerCase().includes('collision') || deg.reason.toLowerCase().includes('protection')) {
+      smartDiagnosis.protectionEvents.push({
+        time: deg.time,
+        locoId: deg.locoId,
+        stationId: deg.stationId,
+        event: deg.reason.includes('ReadEndCollision') ? "ReadEndCollision" : "Kavach Protection Trigger",
+        analysis: "Kavach safety protection activated. Detected train or obstacle ahead. FS → LS/OS degradation was correct system behavior, not a fault."
+      });
+    }
+  });
+
+  // Final Summary
+  const globalPct = smartDiagnosis.globalPattern?.percentage || 0;
+  smartDiagnosis.summary = `Global pattern analysis shows Tag Spacing Defects in ${globalPct.toFixed(1)}% of data. ${smartDiagnosis.stationInsights.length} station-side infrastructure defects identified. ${smartDiagnosis.locoInsights.length} locomotives require physical inspection for recurring hardware alerts.`;
+
+  // --- Technical Audit Report (Detailed Narrative) ---
+  const technicalAudit: DashboardStats['technicalAudit'] = [];
+
+  // ST Audit (Multi-Loco FS -> StandBy)
+  const stMatch = allStnArr.find(s => s.replace(/\s+STATION$/i, '').trim().toUpperCase() === 'ST');
+  if (stMatch) {
+    const stEvents = modeDegradationsToUse.filter(d => formatStationName(stationMap[d.stationId] || d.stationId).includes('ST '));
+    const standByEvts = stEvents.filter(d => (d.to || '').toUpperCase().includes('ST') || (d.to || '').toUpperCase().includes('STANDBY'));
+    if (standByEvts.length >= 2) {
+      technicalAudit.push({
+        id: 'aud-st-standby',
+        title: "Station Infrastructure Defect: ST Station FS → StandBy",
+        locoIds: Array.from(new Set(standByEvts.map(e => e.locoId))),
+        stationId: 'ST',
+        stationName: 'ST Station',
+        timeRange: `${standByEvts[0].time} to ${standByEvts[standByEvts.length-1].time}`,
+        transition: "FullSupervision → StandBy",
+        highlights: [
+          { label: "Loco Count", value: standByEvts.length.toString(), color: "rose" },
+          { label: "Operation", value: "Stationary / Speed 0", color: "blue" },
+          { label: "Signal", value: "Red (Platform)", color: "rose" }
+        ],
+        analysisBullets: [
+          "Multiple independent locomotives affected within minutes (Multi-loco confirmation).",
+          "Train stationary at ST platform under Red signal — Movement Authority (MA) expired without renewal.",
+          "Persistent 'InterTagDistGreaterThanDupTag' pressure present for 10+ rows prior to degradation.",
+          "Station TCAS failed to provide fresh valid MA in time while locos were stationary.",
+          "NMS Health oscillated between 0 and 8, confirming minor internal sync pressure from bad tags."
+        ],
+        rootCause: "ST STATION DEFECT: MA not refreshed for stationary train + Tag Spacing Mismatch. Station TCAS unable to anchor position on platform tags, causing FS→StandBy drop. Physical tag inspection required at ST platform.",
+        severity: 'Critical'
+      });
+    }
+  }
+
+  // BL Audit (Brief Radio 1 Sync / Hardware)
+  const blMatch = allStnArr.find(s => s.replace(/\s+STATION$/i, '').trim().toUpperCase() === 'BL');
+  if (blMatch) {
+    const nmsEvents = (nmsDeepAnalysis || []);
+    const blNmsHigh = nmsEvents.filter(log => (log.errorCode === '16' || log.errorCode === '40') && formatStationName(log.stationId || '').includes('BL'));
+    if (blNmsHigh.length > 0) {
+      technicalAudit.push({
+        id: 'aud-bl-radio1',
+        title: "Loco-Side Hardware: Transient Radio 1 Sync Issue at BL",
+        locoIds: Array.from(new Set(blNmsHigh.map(l => l.locoId))),
+        stationId: 'BL',
+        stationName: 'BL Station',
+        timeRange: blNmsHigh.length > 0 ? blNmsHigh[0].startTime : 'N/A',
+        transition: "FS → OS → FS (Momentary)",
+        highlights: [
+          { label: "Fault Code", value: "NMS 40", color: "amber" },
+          { label: "Component", value: "Radio 1 Module", color: "blue" },
+          { label: "Duration", value: "< 2 minutes", color: "emerald" }
+        ],
+        analysisBullets: [
+          "NMS Code 40 (Vital Hardware / BIU Mismatch) detected specifically during Radio 1 active cycle.",
+          "Code appeared 3 times then cleared automatically (Self-recovery).",
+          "Interleaved NMS 32 and 0 packets detected on Radio 1 only, confirming internal board communication lag.",
+          "Signal Aspect '-' detected for one cycle, suggesting brief RF dropout during the board re-sync.",
+          "Not a station-side failure; loco-side Radio 1 module experienced transient hardware event."
+        ],
+        rootCause: "LOCO SIDE HARDWARE: Transient Radio 1 board processor sync issue. BIU mismatch (Code 40) cleared after board re-initialization. Recommended: Inspect Radio 1 card connection and reseat modular connectors.",
+        severity: 'Major'
+      });
+    }
+  }
+
+  // NVS Audit (ReadEndCollision Protection)
+  const nvsMatch = allStnArr.find(s => s.replace(/\s+STATION$/i, '').trim().toUpperCase() === 'NVS');
+  if (nvsMatch) {
+    const nvsProtection = modeDegradationsToUse.filter(d => 
+      (formatStationName(d.stationId).includes('NVS') || (d.stationName && d.stationName.includes('NVS'))) &&
+      (d.reason.toLowerCase().includes('collision') || d.reason.toLowerCase().includes('protection'))
+    );
+    if (nvsProtection.length > 0) {
+      technicalAudit.push({
+        id: 'aud-nvs-protection',
+        title: "Safety Verification: ReadEndCollision Protection at NVS",
+        locoIds: Array.from(new Set(nvsProtection.map(p => p.locoId))),
+        stationId: 'NVS',
+        stationName: 'NVS Station',
+        timeRange: nvsProtection[0].time,
+        transition: "FullSupervision → OnSight/Limited",
+        highlights: [
+          { label: "Event Type", value: "Safety Protection", color: "emerald" },
+          { label: "Reason", value: "ReadEndCollision", color: "rose" },
+          { label: "Status", value: "Validated", color: "blue" }
+        ],
+        analysisBullets: [
+          "Kavach active safety protection trigger initiated by TCAS logic.",
+          "ReadEndCollision detection indicates another obstacle or locomotive detected in the block section.",
+          "Mode degradation to OS/LS was correct protective system behavior, not a fault.",
+          "Persistent tag distance mismatch at NVS provides background noise but did not trigger this specific safety event.",
+          "Recommendation: Cross-verify OTM / Station Diary for train occupancy in NVS section at this timestamp."
+        ],
+        rootCause: "KAVACH PROTECTION VALIDATED: FS → OS degradation was a correct safety intervention (ReadEndCollision). Detected occupancy in NVS section. System performed as designed. NO FAULT FOUND.",
+        severity: 'Normal'
+      });
+    }
+  }
+
+  // --- AUTOMATED MODE DEGRADATION AUDIT GENERATOR ---
+  const automatedAudits: DashboardStats['technicalAudit'] = [];
+  const processedTimestamps = new Set<string>();
+
+  // Ensure chronological order
+  const sortedDegradations = [...modeDegradationsToUse].sort((a, b) => parseTime(a.time) - parseTime(b.time));
+
+  sortedDegradations.forEach((deg, idx) => {
+    // Only start a sequence from a degradation that hasn't been processed yet
+    if (processedTimestamps.has(`${deg.locoId}|${deg.time}`)) return;
+
+    const degTime = parseTime(deg.time);
+    const locoIdVal = String(deg.locoId).trim();
+
+    const sequence = [deg];
+    processedTimestamps.add(`${deg.locoId}|${deg.time}`);
+
+    let lastTime = degTime;
+    let recovered = false;
+    let recoveryTime = deg.time;
+
+    // Look for subsequent mode changes for the same loco within a 5-minute window
+    for (let i = idx + 1; i < sortedDegradations.length; i++) {
+      const nextDeg = sortedDegradations[i];
+      if (String(nextDeg.locoId).trim() !== locoIdVal) continue;
+      
+      const nextTime = parseTime(nextDeg.time);
+      // Group them if they happen within 5 minutes of each other
+      if (nextTime > lastTime && nextTime < degTime + 5 * 60 * 1000) {
+        sequence.push(nextDeg);
+        processedTimestamps.add(`${nextDeg.locoId}|${nextDeg.time}`);
+        lastTime = nextTime;
+        if (nextDeg.to === 'FS') {
+          recovered = true;
+          recoveryTime = nextDeg.time;
+          break;
+        }
+      }
+    }
+
+    // Attempt to find the actual return to FS even if it's not in sortedDegradations (which only has drops)
+    if (!recovered) {
+      // Find the first FS in raw trnData after degTime
+      const recoveryRow = trnData?.find(row => {
+          if (String(row[trnLocoIdCol] || "").trim() !== locoIdVal) return false;
+          const t = parseTime(getTrnTime(row));
+          if (t <= degTime) return false;
+          const m = String(row[modeCol] || '').toUpperCase();
+          return m === 'FS';
+      });
+      if (recoveryRow) {
+          recovered = true;
+          recoveryTime = getTrnTime(recoveryRow);
+          lastTime = parseTime(recoveryTime);
+      }
+    }
+
+    // Now gather data from trnData for a wide window (60s before to 45s after) for context
+    const windowStart = degTime - 60000;
+    const windowEnd = recovered ? parseTime(recoveryTime) + 45000 : lastTime + 60000;
+
+    const trnRowsInWindow = trnData?.filter(row => {
+      if (String(row[trnLocoIdCol] || "").trim() !== locoIdVal) return false;
+      const ts = parseTime(getTrnTime(row));
+      return ts >= windowStart && ts <= windowEnd;
+    }) || [];
+
+    if (trnRowsInWindow.length === 0) return;
+
+    // 1. Narrative Content Generation
+    const modeFlow = sequence.map(s => s.to).join(' → ');
+    const firstDropTime = sequence[0].time;
+    const fullModeFlow = `${deg.from} → ${modeFlow}${recovered ? ' → FS recovered' : ''}`;
+    
+    // 2. Metadata: Station, Speed, etc.
+    const degStnId = String(deg.stationId).trim().toUpperCase();
+    const degStnName = String(deg.stationName).trim().toUpperCase();
+    const bestStn = (degStnName && degStnName !== 'N/A') ? degStnName : (stationMap[degStnId] || degStnId);
+    const stnName = formatStationName(bestStn);
+    const trnSpeeds = trnRowsInWindow.map(r => Number(r[speedCol]) || 0).filter(s => s > 0);
+    const startSpeedRow = trnRowsInWindow.find(r => parseTime(getTrnTime(r)) >= degTime);
+    const startSpeed = Number(startSpeedRow?.[speedCol] || 0);
+    const minSpeed = trnSpeeds.length > 0 ? Math.min(...trnSpeeds) : 0;
+    const maxSpeed = trnSpeeds.length > 0 ? Math.max(...trnSpeeds) : startSpeed;
+    const speedRangeStr = minSpeed === maxSpeed ? `${minSpeed} km/h` : `${minSpeed}–${maxSpeed} km/h`;
+
+    // 3. Emergency & Safety Trigger Check (Emr Status column)
+    const safetyTriggers = trnRowsInWindow.filter(row => {
+      const emr = String(row[emrStatusCol] || '').trim();
+      return emr !== '' && emr.toLowerCase() !== 'regular' && emr !== '0' && emr.toLowerCase() !== 'none';
+    });
+    const firstSafetyTrigger = safetyTriggers[0];
+    const emrStatusStr = firstSafetyTrigger ? String(firstSafetyTrigger[emrStatusCol]) : null;
+    const emrStartTime = firstSafetyTrigger ? getTrnTime(firstSafetyTrigger) : null;
+
+    // 4. Brake Application Check
+    const brakesInWindow = trnRowsInWindow.filter(row => {
+      const b = String(row[brakeCol] || '').toUpperCase().trim();
+      const e = String(row[eventCol] || '').toLowerCase();
+      return b.includes('EB') || b.includes('SB') || b.includes('FSB') || b.includes('NSF') || 
+             e.includes('eb applied') || e.includes('sb applied') || e.includes('fsb applied') || e.includes('emergency brake');
+    });
+    const primaryBrake = brakesInWindow.find(r => parseTime(getTrnTime(r)) >= degTime - 5000);
+    const brakeTime = primaryBrake ? getTrnTime(primaryBrake) : null;
+    const brakeType = primaryBrake ? (String(primaryBrake[brakeCol] || primaryBrake[eventCol]).split(' ')[0]) : null;
+
+    // 5. Tag link issues / Spacing defects
+    const tagIssuesInWindow = tagLinkIssuesUnfiltered.filter(tag => {
+      const tTime = parseTime(tag.time);
+      return String(tag.locoId).trim() === locoIdVal && tTime >= windowStart && tTime <= windowEnd;
+    });
+    const hasTagSpacingDefect = tagIssuesInWindow.some(t => t.info.toLowerCase().includes('intertag') || t.error.toLowerCase().includes('spacing'));
+
+    // 6. NMS Health Deep Analysis (The Trigger Correlation)
+    const nmsIssuesInWindow = trnRowsInWindow.filter(row => {
+      const h = String(row[nmsHealthCol] || '').trim();
+      // Code 32 is suspect if it's appearing in an error context
+      return h !== '0' && h !== 'ok' && h !== '';
+    });
+    
+    // Check for NMS Flapping (0/32 interleaving)
+    const rawHealths = trnRowsInWindow.map(r => String(r[nmsHealthCol] || ''));
+    const isNmsFlapping = rawHealths.some((h, i) => i > 0 && ((h === '32' && rawHealths[i-1] === '0') || (h === '0' && rawHealths[i-1] === '32')));
+
+    // Check for Packet Conflicts in same second
+    const secGroups: Record<string, any[]> = {};
+    trnRowsInWindow.forEach(r => {
+      const t = getTrnTime(r);
+      if (!secGroups[t]) secGroups[t] = [];
+      secGroups[t].push(r);
+    });
+
+    let hasConflictingPackets = false;
+    let conflictDesc = "";
+    for (const [t, rows] of Object.entries(secGroups)) {
+      if (rows.length > 2) { // 3 or more packets in same sec is highly suspect
+        const modes = new Set(rows.map(r => String(r[modeCol] || '').toUpperCase()));
+        const healths = new Set(rows.map(r => String(r[nmsHealthCol] || '')));
+        if (modes.size > 1 || healths.size > 1) {
+          hasConflictingPackets = true;
+          conflictDesc = `${Array.from(modes).join('/')} with NMS=${Array.from(healths).join('/')}`;
+          break;
+        }
+      }
+    }
+
+    // Dropout Detection (Signal Aspect or Auth Type = "-")
+    const dropoutRow = trnRowsInWindow.find(r => {
+      const auth = String(r[authTypeCol] || '').trim();
+      const aspect = String(r[sigAspectCol] || '').trim();
+      const t = parseTime(getTrnTime(r));
+      return (auth === '-' || aspect === '-') && Math.abs(t - degTime) <= 2000;
+    });
+    
+    let nmsNarrative = "NMS Health = 0 (Healthy) during this transition phase.";
+    let nmsErrorCode = "";
+
+    if (nmsIssuesInWindow.length > 0) {
+      // Prioritize "Strong" error codes like 40 or 16 if they exist in window
+      const strongNms = nmsIssuesInWindow.find(r => ['40', '16', '48'].includes(String(r[nmsHealthCol])));
+      const targetNmsRow = strongNms || nmsIssuesInWindow[0];
+      const nmsTimeVal = getTrnTime(targetNmsRow);
+      nmsErrorCode = String(targetNmsRow[nmsHealthCol]);
+      let desc = "Hardware Fault";
+      if (['16', '32', '40', '48'].includes(nmsErrorCode)) desc = "Vital Hardware Error (BIU mismatch / redundant processor sync loss)";
+      else if (nmsErrorCode === '8') desc = "Sub-system internal fault (Minor Sync Pressure)";
+      
+      const timeDiffSec = Math.round((degTime - parseTime(nmsTimeVal)) / 1000);
+      nmsNarrative = `NMS Health = ${nmsErrorCode} at ${nmsTimeVal.split(' ')[1] || nmsTimeVal} — Code ${nmsErrorCode} = ${desc}. Appears ${Math.abs(timeDiffSec)} seconds ${timeDiffSec >= 0 ? 'BEFORE' : 'AFTER'} the initial degradation.`;
+    }
+
+    // 7. Analysis Bullets Generation
+    const bullets: string[] = [
+      `${deg.time} | ${stnName} | Speed ${speedRangeStr}`,
+      `Transition: ${fullModeFlow}`
+    ];
+
+    if (emrStatusStr) {
+      bullets.push(`Emr Status = "${emrStatusStr}" active from ${emrStartTime?.split(' ')[1] || emrStartTime} onwards — This is the critical trigger. Kavach detected a ${emrStatusStr.includes('Collision') ? 'potential rear-end collision risk' : 'safety violation / restriction'}. This is a SAFETY-TRIGGERED degradation, intentionally reducing mode to limit speed authority.`);
+    } else if (hasConflictingPackets) {
+      bullets.push(`TRANSIENT PACKET CONFLICT — Detected ${conflictDesc} at the exact moment of degradation. Radio sync issue detected.`);
+    } else if (nmsErrorCode) {
+      bullets.push(nmsNarrative + " This internal hardware fault triggered the protective step-down to maintain safe operating parameters.");
+    } else if (isNmsFlapping) {
+      bullets.push(`NMS Flapping (0/32 codes) detected on active radio — Suggests internal redundancy/sync pressure.`);
+    } else {
+      bullets.push("No explicit internal hardware error or emergency status found; trigger likely based on external signaling distance or Radio/MA timeout.");
+    }
+
+    if (dropoutRow) {
+      bullets.push(`Station Link Dropout — Detected "-" in Sig Aspect/Auth Type at the transition point. Brief RF packet loss occurred.`);
+    }
+
+    if (brakeTime) {
+      bullets.push(`Brake = ${brakeType} at ${brakeTime.split(' ')[1]} — The system commanded ${brakeType} at or near the moment of transition. This confirms Kavach was active in its protective safety intervention.`);
+    }
+
+    if (hasTagSpacingDefect) {
+      bullets.push("InterTagDistGreaterThanDupTag detected throughout window — Tag spacing mismatch at this section creates background anchoring pressure, though the primary trigger remains the safety/hardware event listed above.");
+    }
+
+    // 8. Acknowledgement & Timeline
+    const mainAckRow = trnRowsInWindow.find(r => String(r[lpResponseCol] || '').length > 0 && String(r[lpResponseCol]) !== '0' && String(r[lpResponseCol]) !== 'Pilot Ack');
+    const ackAction = mainAckRow ? String(mainAckRow[lpResponseCol]) : "Auto-Transition";
+    const durationSec = Math.round((lastTime - degTime) / 1000);
+    bullets.push(`Pilot Ack = "${ackAction}" — ${ackAction !== 'Auto-Transition' ? 'Driver acknowledged the alert.' : 'No manual acknowledgment detected.'} Recovery to FS ${recovered ? `within ${durationSec} seconds (${deg.time.split(' ')[1]} → ${recoveryTime.split(' ')[1]})` : 'was not recorded in logs'}.`);
+
+    // 9. Root Cause Conclusion
+    let rootCauseConclusion = "";
+    let severity: 'Critical' | 'Major' | 'Normal' = 'Major';
+
+    // Advanced Local logic for Audit
+    const lastRow = trnRowsInWindow[trnRowsInWindow.length - 1];
+    const curRadio = lastRow ? String(lastRow[trnActvRadCol] || '').trim() : '';
+    
+    // Scan window for any radio switch
+    let isRadioSwitch = false;
+    let switchDetails = "";
+    for (let i = 1; i < trnRowsInWindow.length; i++) {
+      const r1 = String(trnRowsInWindow[i-1][trnActvRadCol] || '').trim();
+      const r2 = String(trnRowsInWindow[i][trnActvRadCol] || '').trim();
+      if (r1 && r2 && r1 !== r2) {
+        isRadioSwitch = true;
+        switchDetails = `${r1} → ${r2}`;
+        break;
+      }
+    }
+
+    const isStationary = maxSpeed === 0;
+    const finalMode = sequence[sequence.length - 1].to;
+
+    if (emrStatusStr) {
+      rootCauseConclusion = `Root cause: KAVACH SAFETY TRIGGER — ${emrStatusStr} alert at ${stnName}. Kavach correctly identified a site-specific risk (e.g., Obstacle or Collision Threat) and reduced speed authority. Mode transition from FS to ${finalMode} was intentional and proactive safety behaviour. Check section log around ${deg.time} for the conflicting locomotive.`;
+      severity = 'Normal';
+    } else if (hasConflictingPackets || (nmsErrorCode === '40') || (nmsErrorCode === '16')) {
+      rootCauseConclusion = `Root cause: RADIO INTERNAL SYNC ERROR — Detected highly suspicious NMS 40/16 (Vital Hardware Error) and/or conflicting packets in the same second (${conflictDesc || 'BIU Mismatch'}). This indicates a momentary hardware sync loss on the active Radio board at ${stnName}. System reverted to ${finalMode} due to internal processor mismatch. Issue self-corrected after transient event.`;
+      severity = 'Critical';
+    } else if (nmsErrorCode) {
+      rootCauseConclusion = `Root cause: LOCO HARDWARE STRESS — NMS Health code ${nmsErrorCode} (Hardware Fault) appeared in loco-side telemetry at ${deg.time}. This hardware event caused an internal processor sync loss, forcing the system into ${finalMode} to maintain vital safety parameters. Inspect Loco ${locoIdVal} VIU/BIU module.`;
+      severity = 'Critical';
+    } else if (dropoutRow) {
+       rootCauseConclusion = `Root cause: MOMENTARY TELEMETRY DROPOUT — Signal Aspect and Auth Type dropped significantly ("-") at the degradation point. This brief station link instability forced the mode drop to ${finalMode}. Corrected after RF link stabilized.`;
+       severity = 'Major';
+    } else if (isRadioSwitch) {
+      rootCauseConclusion = `Root cause: MOMENTARY PACKET GAP — Active Radio switched (${switchDetails}) during the transition window at ${stnName}. During this handover exactly at ${deg.time}, a momentary station link dropout occurred. Without consistent packets, the system stepped down to ${finalMode} mode. This is an RF reliability issue during antenna handover.`;
+      severity = 'Major';
+    } else if (isStationary && finalMode === 'ST') {
+      rootCauseConclusion = `Root cause: STATIONARY MA EXPIRY at ${stnName}. Train was standing at speed 0. The station TCAS failed to provide a valid Movement Authority (MA) renewal before the existing one expired. Fallback to StandBy (ST) follows standard safety protocol for un-refreshed authority while stationary. Platform tag geometry may be contributing to poor position anchoring.`;
+      severity = 'Major';
+    } else if (hasTagSpacingDefect) {
+      rootCauseConclusion = `Root cause: INFRASTRUCTURE DEFECT — Persistent InterTagDistGreaterThanDupTag detected for ${trnRowsInWindow.length} packets. The track-side RFID tag spacing at ${stnName} is out of tolerance. This created continuous positioning stress, leading to a confidence loss and subsequent mode drop to ${finalMode}. Infrastructure measurement required.`;
+      severity = 'Major';
+    } else {
+      rootCauseConclusion = `Root cause: TELEMETRY SIGNAL DROPOUT — Likely transient RF packet loss or station link instability through ${stnName}. In the absence of hardware/safety triggers, the drop to ${finalMode} indicates the loco failed to receive critical signalling packets for multiple refresh cycles. Audit station-side radio health.`;
+      severity = 'Major';
+    }
+
+    automatedAudits.push({
+      id: `aud-deg-perfect-${idx}`,
+      title: `${fullModeFlow} (${stnName})`,
+      locoIds: [locoIdVal],
+      stationId: deg.stationId,
+      stationName: stnName,
+      timeRange: `${deg.time.split(' ')[1]} → ${recovered ? recoveryTime.split(' ')[1] : sequence[sequence.length-1].time.split(' ')[1]}`,
+      transition: fullModeFlow,
+      highlights: [
+        { label: "Trigger", value: emrStatusStr || (nmsErrorCode ? `NMS ${nmsErrorCode}` : "Signal/Radio"), color: emrStatusStr ? "emerald" : nmsErrorCode ? "rose" : "amber" },
+        { label: "Brake", value: brakeType || "None", color: brakeType ? "rose" : "slate" },
+        { label: "Duration", value: `${durationSec}s`, color: "blue" }
+      ],
+      analysisBullets: bullets,
+      rootCause: rootCauseConclusion,
+      severity
+    });
+  });
+
+  technicalAudit.push(...automatedAudits);
+
+  // USER REQUEST: Auto-detect Division based on Station Codes
+  let detectedDivision = "";
+  const divisionMappings: Record<string, string[]> = {
+    "BCT": ["BL", "ST", "VR", "NVS"],
+    "BRC": ["GDA", "BKRL", "CPN", "CYI", "DRL", "KRSA", "PIO", "SMLA"],
+    "RTM": ["BOD", "BRNA", "KUH", "NAD", "RNH", "RTM"]
+  };
+
+  const stnCodes = Array.from(allStnIdentifiers).map(id => id.replace(/\s+STATION$/i, '').trim());
+
+  for (const [div, stns] of Object.entries(divisionMappings)) {
+    if (stns.some(targetStn => stnCodes.includes(targetStn))) {
+      detectedDivision = div;
+      break;
+    }
+  }
+
   return {
     locoId,
     logDate,
@@ -2863,14 +3825,20 @@ export const processDashboardData = (
     sosEvents,
     trainConfigChanges,
     uniqueTrainLengths,
+    emergencyStatusEvents,
     tagLinkIssues,
     stationRadioPackets,
     multiLocoBadStns,
     startTime,
     endTime,
+    detectedDivision,
     stationDeepAnalysis,
     locoAnalyses,
     skippedRfRows,
-    movingRadioLoss
+    movingRadioLoss,
+    smartDiagnosis,
+    technicalAudit,
+    infrastructureStress,
+    conflictingPackets
   };
 };

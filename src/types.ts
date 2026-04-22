@@ -66,7 +66,7 @@ export interface DashboardStats {
   avgLag: number;
   maPackets: { time: string; delay: number; category: string; length: number; locoId: string | number }[];
   nmsStatus: { name: string; value: number }[];
-  nmsLogs: { time: string; health: string; locoId: string | number }[];
+  nmsLogs: { time: string; health: string; status: string; locoId: string | number }[];
   nmsLocoStats?: { locoId: string | number; totalRecords: number; errors: number; errorPercentage: number; category: string }[];
   nmsDeepAnalysis?: { locoId: string | number; stationId: string; stationName?: string; startTime: string; endTime: string; count: number; errorCode: string; errorType: string; description: string; source: string; }[];
   intervalDist: { category: string; percentage: number }[];
@@ -85,15 +85,46 @@ export interface DashboardStats {
     rowCount: number;
     totalPercSum: number;
   }[];
-  modeDegradations: { time: string; from: string; to: string; reason: string; lpResponse: string; stationId: string; stationName?: string; locoId: string | number; direction?: string; radio?: string }[];
+  modeDegradations: { 
+    time: string; 
+    from: string; 
+    to: string; 
+    reason: string; 
+    lpResponse: string; 
+    stationId: string; 
+    stationName?: string; 
+    locoId: string | number; 
+    direction?: string; 
+    radio?: string;
+    speed?: number;
+    emrStatus?: string;
+    nmsAtEvent?: string;
+    tagLinkAtEvent?: string;
+    preNmsCodes?: string[];
+    radioSwitchAtEvent?: boolean;
+    rootCause?: string;
+    rootCauseCategory?: 'station-tag' | 'safety-trigger' | 'loco-nms' | 'radio-switch' | 'ma-expiry' | 'unknown';
+    actionRequired?: string;
+    severity?: 'critical' | 'warning' | 'info';
+  }[];
   radioPacketLossEvents: { time: string; stationName: string; reason: string; details: string; locoId: string | number; duration?: number; radio?: string }[];
   shortPackets: { time: string; type: string; length: number; locoId: string | number; radio?: string }[];
-  brakeApplications: { time: string; type: string; speed: number; location: string; stationId: string; locoId: string | number; radio?: string }[];
-  signalOverrides: { time: string; signalId: string; status: string; stationId: string; locoId: string | number; radio?: string }[];
-  sosEvents: { time: string; source: string; type: string; stationId: string; locoId: string | number; radio?: string }[];
-  trainConfigChanges: { time: string; parameter: string; oldVal: string; newVal: string; stationId: string; locoId: string | number; radio?: string }[];
-  uniqueTrainLengths: { length: number; time: string; stationId: string; locoId: string | number; radio?: string }[];
-  tagLinkIssues: { time: string; stationId: string; info: string; error: string; locoId: string | number; radio?: string; isCritical?: boolean }[];
+  brakeApplications: { time: string; type: string; speed: number; location: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  signalOverrides: { time: string; signalId: string; status: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  sosEvents: { time: string; source: string; type: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  trainConfigChanges: { time: string; parameter: string; oldVal: string; newVal: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  uniqueTrainLengths: { length: number; time: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  emergencyStatusEvents: {
+    startTime: string;
+    endTime: string;
+    locoId: string | number;
+    stationId: string;
+    stationName?: string;
+    status: string;
+    rowCount: number;
+    radio?: string;
+  }[];
+  tagLinkIssues: { time: string; stationId: string; stationName?: string; info: string; error: string; locoId: string | number; radio?: string; isCritical?: boolean }[];
   multiLocoBadStns: { 
     stationId: string | number; 
     locoCount: number; 
@@ -119,6 +150,7 @@ export interface DashboardStats {
   }[];
   startTime: string;
   endTime: string;
+  detectedDivision?: string;
   
   // Deep Analysis Fields
   stationDeepAnalysis: {
@@ -172,6 +204,17 @@ export interface DashboardStats {
       actionRequired: string;
     };
   };
+  infrastructureStress?: {
+    overallScore: number;
+    tagSpacingDefects: number;
+    totalTagTelemetry: number;
+    stationWiseStress: {
+      stationId: string;
+      stationName?: string;
+      stressScore: number;
+      errorCode: string;
+    }[];
+  };
   locoAnalyses: Record<string, any>;
   skippedRfRows: number;
   movingRadioLoss?: {
@@ -181,6 +224,61 @@ export interface DashboardStats {
     r1Usage: number;
     r2Usage: number;
     conclusion: string;
+  }[];
+  smartDiagnosis?: {
+    globalPattern?: {
+      issue: string;
+      totalRows: number;
+      affectedRows: number;
+      percentage: number;
+      explanation: string;
+    };
+    stationInsights: {
+      stationId: string;
+      stationName?: string;
+      severity: 'Critical' | 'Major' | 'Warning';
+      description: string;
+      locosAffected: (string | number)[];
+      details: string[];
+    }[];
+    locoInsights: {
+      locoId: string | number;
+      issue: string;
+      context: string;
+      recommendation: string;
+    }[];
+    protectionEvents: {
+      time: string;
+      locoId: string | number;
+      stationId: string;
+      event: string;
+      analysis: string;
+    }[];
+    summary: string;
+  };
+  technicalAudit?: {
+    id: string;
+    title: string;
+    locoIds: (string | number)[];
+    stationId: string;
+    stationName?: string;
+    timeRange: string;
+    transition: string;
+    highlights: { label: string; value: string; color?: string }[];
+    analysisBullets: string[];
+    rootCause: string;
+    severity: 'Critical' | 'Major' | 'Normal';
+  }[];
+  conflictingPackets?: {
+    time: string;
+    locoId: string | number;
+    stationId: string;
+    stationName?: string;
+    description: string;
+    modes: string[];
+    nmsCodes: string[];
+    severity: 'High' | 'Medium';
+    radio?: string;
   }[];
 }
 

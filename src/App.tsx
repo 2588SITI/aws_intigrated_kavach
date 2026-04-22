@@ -9,6 +9,7 @@ import {
   Upload, 
   CheckCircle2, 
   AlertCircle, 
+  Construction,
   BarChart3, 
   Calculator,
   Activity, 
@@ -24,8 +25,14 @@ import {
   Download,
   Wifi,
   FileText,
-  RefreshCw
+  RefreshCw,
+  ClipboardList,
+  ShieldAlert,
+  Tag,
+  Search,
+  Zap as ZapIcon
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { 
   BarChart, 
   Bar, 
@@ -48,6 +55,36 @@ import { CalculationMethodology } from './components/CalculationMethodology';
 import { cn } from './utils/cn';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+
+const StationDisplay = ({ id, name, showEmerald = true }: { id: string | number, name?: string, showEmerald?: boolean }) => {
+  const normalizedId = String(id || '').trim();
+  const normalizedName = String(name || '').trim();
+
+  const idName = formatStationName(normalizedId);
+  const rawName = normalizedName && normalizedName !== 'N/A' && normalizedName !== '-' && normalizedName !== '0' && normalizedName !== '0.0' && normalizedName !== ''
+                ? formatStationName(normalizedName) 
+                : null;
+  
+  if (idName !== 'N/A' && idName !== '') {
+    return (
+      <span className="inline-block">
+        <span className="font-bold block">{idName}</span>
+        {rawName && rawName !== idName && (
+          <span className={cn("text-[10px] font-bold uppercase tracking-tight leading-none mt-0.5 block", showEmerald ? "text-emerald-400" : "text-slate-400")}>
+            {rawName}
+          </span>
+        )}
+      </span>
+    );
+  } else if (rawName) {
+    return (
+      <span className={cn("inline-block font-bold", showEmerald ? "text-emerald-400" : "text-white")}>
+        {rawName}
+      </span>
+    );
+  }
+  return <span className="text-slate-500">-</span>;
+};
 
 export default function App() {
   const [files, setFiles] = useState<{ rf: File[]; rfSt: File[]; trn: File[]; radio: File | null }>({
@@ -343,6 +380,9 @@ export default function App() {
 
       const processed = processDashboardData(rfTrData, trnData, radioData, rfStData);
       setStats(processed);
+      if (processed.detectedDivision) {
+        setDivision(processed.detectedDivision);
+      }
       setSelectedStation('All');
       setSelectedLoco('All');
     } catch (err: any) {
@@ -382,6 +422,9 @@ export default function App() {
       
       const processed = processDashboardData(rfTrData, trnData, radioData, rfStData);
       setStats(processed);
+      if (processed.detectedDivision) {
+        setDivision(processed.detectedDivision);
+      }
       setSelectedStation('All');
       setSelectedLoco('All');
       setStartDate('All');
@@ -618,46 +661,93 @@ export default function App() {
 
       let currentY = 105;
 
-      // Mode Degradation Table (User Requested: SHIFTED TO SECOND POSITION)
+      // Mode Degradation Events (Detailed Analysis) - MOVED TO #2
       if (filteredStats.modeDegradations.length > 0) {
+        doc.addPage();
+        currentY = 20;
         doc.setFontSize(16);
         doc.setTextColor(0, 102, 204);
-        doc.text('2. Mode Degradation Events', 20, currentY);
-        
-        const modeRows = filteredStats.modeDegradations.map(d => [
-          d.time, 
-          d.locoId,
-          formatStationName(d.stationId), 
-          d.direction || 'N/A',
-          d.from, 
-          d.to, 
-          d.reason
-        ]);
-        autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Time', 'Loco No', 'Station', 'Dir', 'From', 'To', 'Reason']],
-          body: modeRows,
-          theme: 'striped',
-          headStyles: { fillColor: [220, 50, 50] },
-          styles: { fontSize: 8 }
+        doc.text('2. Mode Degradation & Root Cause Analysis', 20, currentY);
+        currentY += 10;
+
+        filteredStats.modeDegradations.forEach((deg, idx) => {
+          if (currentY > 240) { doc.addPage(); currentY = 20; }
+          
+          // Event Header Strip
+          doc.setFillColor(deg.severity === 'critical' ? 254 : 255, deg.severity === 'critical' ? 242 : 251, deg.severity === 'critical' ? 242 : 191); // Faint Red or Amber
+          doc.rect(20, currentY, 170, 10, 'F');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10);
+          doc.setTextColor(50);
+          
+          const idStr = formatStationName(deg.stationId);
+          const nameStr = deg.stationName && deg.stationName !== 'N/A' ? formatStationName(deg.stationName) : '';
+          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} (${nameStr})` : (nameStr || idStr);
+
+          doc.text(`${deg.time} | ${deg.from} -> ${deg.to} | STN: ${stnDisplay} | Loco: ${deg.locoId}`, 25, currentY + 6.5);
+          currentY += 14;
+
+          // Evidence Context
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(100);
+          const contextStr = `Speed: ${deg.speed} Kmph | Radio: ${deg.radio || 'N/A'} | NMS: ${deg.nmsAtEvent || '0'} | Emr: ${deg.emrStatus || 'Regular'}`;
+          doc.text(contextStr, 25, currentY);
+          currentY += 6;
+
+          // Root Cause block
+          doc.setFont('helvetica', 'bold');
+          if (deg.severity === 'critical') {
+            doc.setTextColor(220, 38, 38);
+          } else {
+            doc.setTextColor(217, 119, 6);
+          }
+          doc.text('ROOT CAUSE:', 25, currentY);
+
+          doc.setFont('helvetica', 'italic');
+          doc.setTextColor(30);
+          const rcLines = doc.splitTextToSize(deg.rootCause || 'Contextual analysis inconclusive.', 150);
+          doc.text(rcLines, 55, currentY);
+          currentY += (rcLines.length * 4.5) + 4;
+
+          // Action Required
+          if (deg.actionRequired) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(0, 102, 204);
+            doc.text('ACTION:', 25, currentY);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(50);
+            const actionLines = doc.splitTextToSize(deg.actionRequired, 150);
+            doc.text(actionLines, 55, currentY);
+            currentY += (actionLines.length * 4.5) + 6;
+          }
+          
+          doc.setDrawColor(230);
+          doc.line(20, currentY, 190, currentY);
+          currentY += 8;
         });
-        currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // Brake Applications Table (User Requested: SHIFTED TO THIRD POSITION)
+      // Brake Applications Table - MOVED TO #3
       if (filteredStats.brakeApplications.length > 0) {
         if (currentY > 240) { doc.addPage(); currentY = 20; }
         doc.setFontSize(16);
         doc.setTextColor(0, 102, 204);
         doc.text('3. Brake Applications by Kavach', 20, currentY);
         
-        const brakeRows = filteredStats.brakeApplications.map(b => [
-          b.time, 
-          b.locoId,
-          b.type, 
-          `${b.speed} Kmph`, 
-          formatStationName(b.stationId)
-        ]);
+        const brakeRows = filteredStats.brakeApplications.map(b => {
+          const idStr = formatStationName(b.stationId);
+          const nameStr = b.stationName && b.stationName !== 'N/A' ? formatStationName(b.stationName) : '';
+          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
+
+          return [
+            b.time, 
+            b.locoId,
+            b.type, 
+            `${b.speed} Kmph`, 
+            stnDisplay
+          ];
+        });
         autoTable(doc, {
           startY: currentY + 5,
           head: [['Time', 'Loco No', 'Type', 'Speed', 'Station']],
@@ -669,15 +759,182 @@ export default function App() {
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // Tag Issues Table (User Requested: SHIFTED TO FOURTH POSITION)
+      // SOS Emergency Table - ADDED FOR #4
+      if (filteredStats.sosEvents.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 20; }
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('4. SOS Emergency Events & Alerts', 20, currentY);
+        
+        const sosRows = filteredStats.sosEvents.map(s => {
+          const idStr = formatStationName(s.stationId);
+          const nameStr = s.stationName && s.stationName !== 'N/A' ? formatStationName(s.stationName) : '';
+          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
+          
+          return [
+            s.time,
+            s.type,
+            s.source,
+            s.locoId,
+            stnDisplay
+          ];
+        });
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Time', 'Trigger Type', 'Source', 'Loco No', 'Station Area']],
+          body: sosRows,
+          theme: 'striped',
+          headStyles: { fillColor: [225, 29, 72] }, // Rose-600
+          styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // Emergency Status Table - MOVED TO #5
+      if (filteredStats.emergencyStatusEvents.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 20; }
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('5. Emergency Status Reports (Non-Regular)', 20, currentY);
+        
+        const emrRows = filteredStats.emergencyStatusEvents.map(e => {
+          const idStr = formatStationName(e.stationId);
+          const nameStr = e.stationName && e.stationName !== 'N/A' ? formatStationName(e.stationName) : '';
+          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
+          
+          return [
+            e.startTime,
+            e.endTime,
+            e.status,
+            e.locoId,
+            stnDisplay
+          ];
+        });
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Start Time', 'Finish Time', 'Emergency Status', 'Loco No', 'Station']],
+          body: emrRows,
+          theme: 'striped',
+          headStyles: { fillColor: [220, 38, 38] }, // Red-600
+          styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // Smart Diagnosis Section (Root Cause & Pattern Analysis) - MOVED TO #6
+      if (filteredStats.smartDiagnosis) {
+        if (currentY > 210) { doc.addPage(); currentY = 20; }
+        const sd = filteredStats.smartDiagnosis;
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('6. Root Cause & Pattern Analysis', 20, currentY);
+        currentY += 10;
+
+        // Global Pattern
+        if (sd.globalPattern) {
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(50);
+          doc.text(`GLOBAL PATTERN: ${sd.globalPattern.issue}`, 25, currentY);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(10);
+          doc.setTextColor(100);
+          doc.text(`Incidence Rate: ${sd.globalPattern.percentage.toFixed(1)}% of all data rows (${sd.globalPattern.affectedRows.toLocaleString()} rows).`, 30, currentY + 5);
+          const explLines = doc.splitTextToSize(sd.globalPattern.explanation, 160);
+          doc.text(explLines, 30, currentY + 10);
+          currentY += 15 + (explLines.length * 5);
+        }
+
+        // Station Insights
+        if (sd.stationInsights.length > 0) {
+          if (currentY > 240) { doc.addPage(); currentY = 20; }
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(50);
+          doc.text('STATION-WISE BLAME / INFRASTRUCTURE DEFECTS:', 25, currentY);
+          currentY += 8;
+          sd.stationInsights.forEach(stn => {
+            if (currentY > 260) { doc.addPage(); currentY = 20; }
+            doc.setFontSize(11);
+            doc.setTextColor(stn.severity === 'Critical' ? 200 : 180, stn.severity === 'Critical' ? 0 : 120, 0);
+            doc.text(`${stn.stationName} — ${stn.severity}`, 30, currentY);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(0);
+            doc.setFontSize(10);
+            doc.text(stn.description, 35, currentY + 5);
+            let detailY = currentY + 10;
+            stn.details.forEach(detail => {
+              const detLines = doc.splitTextToSize(`• ${detail}`, 150);
+              doc.text(detLines, 40, detailY);
+              detailY += (detLines.length * 5);
+            });
+            currentY = detailY + 5;
+          });
+        }
+
+        // Loco Side Faults
+        if (sd.locoInsights.length > 0) {
+          if (currentY > 240) { doc.addPage(); currentY = 20; }
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(0, 102, 204);
+          doc.text('LOCOMOTIVE HARDWARE ALERTS:', 25, currentY);
+          currentY += 8;
+          sd.locoInsights.forEach(loco => {
+            if (currentY > 260) { doc.addPage(); currentY = 20; }
+            doc.setFontSize(11);
+            doc.setTextColor(0);
+            doc.text(`Loco ${loco.locoId}: ${loco.issue}`, 30, currentY);
+            doc.setFontSize(9);
+            doc.setTextColor(100);
+            doc.setFont('helvetica', 'italic');
+            doc.text(`Context: ${loco.context}`, 35, currentY + 5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(20, 100, 20);
+            doc.text(`Recommendation: ${loco.recommendation}`, 35, currentY + 10);
+            currentY += 18;
+          });
+        }
+
+        // Safety Protections
+        if (sd.protectionEvents.length > 0) {
+           if (currentY > 240) { doc.addPage(); currentY = 20; }
+           doc.setFontSize(12);
+           doc.setFont('helvetica', 'bold');
+           doc.setTextColor(16, 185, 129);
+           doc.text('KAVACH SAFETY PROTECTION LOGS:', 25, currentY);
+           currentY += 8;
+           sd.protectionEvents.forEach(pe => {
+             doc.setFontSize(10);
+             doc.setTextColor(0);
+             doc.text(`${pe.time} | ${pe.event} at ${formatStationName(pe.stationId)} (Loco ${pe.locoId})`, 30, currentY);
+             doc.setFontSize(9);
+             doc.setTextColor(80);
+             doc.setFont('helvetica', 'normal');
+             const analLines = doc.splitTextToSize(`Analysis: ${pe.analysis}`, 150);
+             doc.text(analLines, 35, currentY + 5);
+             currentY += 8 + (analLines.length * 4);
+           });
+        }
+
+        currentY += 10;
+      }
+
+      // Tag Issues Table (User Requested: SHIFTED TO SEVENTH POSITION)
       const tagIssues = filteredStats.tagLinkIssues;
       if (tagIssues.length > 0) {
         if (currentY > 240) { doc.addPage(); currentY = 20; }
         doc.setFontSize(16);
         doc.setTextColor(0, 102, 204);
-        doc.text('4. Tag Link Issues (Defects Analysis)', 20, currentY);
+        doc.text('7. Tag Link Issues (Defects Analysis)', 20, currentY);
         
-        const tagRows = tagIssues.map(t => [t.time, t.locoId, formatStationName(t.stationId), t.error, t.info]);
+        const tagRows = tagIssues.map(t => {
+          const idStr = formatStationName(t.stationId);
+          const nameStr = t.stationName && t.stationName !== 'N/A' ? formatStationName(t.stationName) : '';
+          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
+          
+          return [t.time, t.locoId, stnDisplay, t.error, t.info];
+        });
         autoTable(doc, {
           startY: currentY + 5,
           head: [['Time', 'Loco No', 'Station ID', 'Error Type', 'Details']],
@@ -692,9 +949,10 @@ export default function App() {
       // Diagnostic Advice
       if (currentY > 240) { doc.addPage(); currentY = 20; }
       
+      // Section 8: Diagnostic Advice
       doc.setFontSize(16);
       doc.setTextColor(0, 102, 204);
-      doc.text('5. Diagnostic Advice & Recommendations', 20, currentY);
+      doc.text('8. Diagnostic Advice & Recommendations', 20, currentY);
       
       let adviceY = currentY + 10;
       filteredStats.diagnosticAdvice.forEach((advice, index) => {
@@ -711,9 +969,10 @@ export default function App() {
 
       // 6. Station Performance Summary
       if (adviceY > 240) { doc.addPage(); adviceY = 20; }
+      // Section 9: Station Performance
       doc.setFontSize(16);
       doc.setTextColor(0, 102, 204);
-      doc.text('6. Station Performance Summary', 20, adviceY);
+      doc.text('9. Station Performance Summary', 20, adviceY);
       
       let stnY = adviceY + 10;
       
@@ -760,7 +1019,7 @@ export default function App() {
       currentY = 20;
       doc.setFontSize(18);
       doc.setTextColor(0, 102, 204);
-      doc.text('6. Deep Analysis — Packet Loss Root Cause', 20, currentY);
+      doc.text('10. Deep Analysis — Packet Loss Root Cause', 20, currentY);
       
       doc.setFontSize(11);
       doc.setTextColor(0);
@@ -885,13 +1144,13 @@ export default function App() {
       const actionLines = doc.splitTextToSize(filteredStats.stationDeepAnalysis.dashboard.actionRequired, 160);
       doc.text(actionLines, 25, currentY + 15);
 
-      // 5. Moving Radio Loss Analysis (Speed > 0)
+      // Section 11: Moving Radio Loss Analysis (Speed > 0)
       if (filteredStats.movingRadioLoss && filteredStats.movingRadioLoss.length > 0) {
         doc.addPage();
         currentY = 20;
         doc.setFontSize(18);
         doc.setTextColor(0, 102, 204);
-        doc.text('7. Moving Radio Loss Analysis (Speed > 0)', 20, currentY);
+        doc.text('11. Moving Radio Loss Analysis (Speed > 0)', 20, currentY);
         
         doc.setFontSize(9);
         doc.setTextColor(80);
@@ -917,6 +1176,25 @@ export default function App() {
           styles: { fontSize: 9 }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // NMS Failure Table
+      if (filteredStats.nmsLogs.length > 0) {
+        doc.addPage();
+        // Section 12: NMS Failure Logs
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('12. System NMS Failure Logs (Top 30)', 20, 20);
+        
+        const nmsRows = filteredStats.nmsLogs.slice(0, 30).map(n => [n.time, n.locoId, n.health, n.status]);
+        autoTable(doc, {
+          startY: 25,
+          head: [['Time', 'Loco No', 'Health Code', 'Status']],
+          body: nmsRows,
+          theme: 'striped',
+          headStyles: { fillColor: [50, 50, 50] },
+          styles: { fontSize: 8 }
+        });
       }
 
       // Signature
@@ -2177,6 +2455,305 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
   );
 }
 
+function TechnicalAuditView({ stats }: { stats: DashboardStats }) {
+  const audits = stats.technicalAudit;
+  if (!audits || audits.length === 0) return (
+    <div className="glass-card p-12 text-center rounded-3xl border-dashed border-2 border-white/5">
+      <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4">
+        <ClipboardList className="w-8 h-8 text-slate-500" />
+      </div>
+      <h3 className="text-xl font-bold text-white mb-2">Technical Audit Log</h3>
+      <p className="text-slate-400 max-w-sm mx-auto">Upload more data to trigger deeper event correlation and automated technical audits.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-12">
+       <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-3">
+              <ClipboardList className="w-7 h-7 text-blue-400" />
+              Technical Audit Report
+            </h2>
+            <p className="text-slate-400 text-sm font-medium mt-1 uppercase tracking-widest opacity-60">Deep Event Analysis (Claude-Report Format)</p>
+          </div>
+          <div className="px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-xl text-blue-400 text-[10px] font-black uppercase tracking-[0.2em]">
+            {audits.length} AUDITS LOGGED
+          </div>
+       </div>
+
+       {audits.map((audit, idx) => (
+         <div key={audit.id} className="relative group">
+           {/* Severity Border Glow */}
+           <div className={cn(
+             "absolute -inset-0.5 rounded-[2.5rem] blur opacity-20 group-hover:opacity-30 transition duration-500",
+             audit.severity === 'Critical' ? "bg-rose-500" : audit.severity === 'Major' ? "bg-amber-500" : "bg-emerald-500"
+           )}></div>
+           
+           <div className="relative bg-[#0a0f1d] overflow-hidden rounded-[1.5rem] border border-white/10 shadow-2xl font-mono">
+              {/* Clinical Header */}
+              <div className="px-8 py-6 bg-white/5 border-b border-white/10">
+                <div className="flex justify-between items-start mb-4 text-[10px] opacity-60">
+                   <div className="flex items-center gap-2 text-slate-400 font-bold">
+                     <Clock className="w-3.5 h-3.5" />
+                     {audit.timeRange}
+                   </div>
+                   <div className="flex items-center gap-2 text-slate-400 font-bold">
+                     <MapPin className="w-3.5 h-3.5" />
+                     {audit.stationName || audit.stationId}
+                   </div>
+                </div>
+
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="text-xl font-bold text-blue-400 italic">EVENT {idx + 1} — {audit.title.toUpperCase()}</h3>
+                  <span className={cn(
+                    "px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest",
+                    audit.severity === 'Critical' ? "bg-rose-500/20 text-rose-400" : 
+                    audit.severity === 'Major' ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"
+                  )}>{audit.severity}</span>
+                </div>
+                
+                {/* Summary Line */}
+                <div className="bg-white/5 p-3 rounded-lg border border-white/5 flex flex-wrap gap-x-12 gap-y-2 text-sm text-slate-300">
+                  {audit.highlights.map((h, hi) => (
+                    <div key={hi} className="flex gap-2">
+                       <span className="text-slate-500 uppercase">{h.label}:</span>
+                       <span className={cn("font-bold", h.color === 'rose' ? 'text-rose-400' : h.color === 'amber' ? 'text-amber-400' : h.color === 'emerald' ? 'text-emerald-400' : 'text-blue-400')}>
+                         {h.value}
+                       </span>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <span className="text-slate-500 uppercase">TRANSITION:</span>
+                    <span className="text-white font-bold italic">{audit.transition}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-8 space-y-8">
+                 {/* Analysis Section */}
+                 <div className="lg:col-span-12">
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                       <div>
+                    <h4 className="text-xs font-black text-slate-300 uppercase tracking-widest mb-4 border-b border-white/10 pb-2 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-blue-400" />
+                      Telemetry Observations & Evidence:
+                    </h4>
+                    <ul className="space-y-4">
+                       {audit.analysisBullets.map((bullet, bi) => (
+                         <li key={bi} className="flex gap-3 group/li">
+                            <span className="text-blue-500 font-bold shrink-0">-</span>
+                            <p className="text-sm font-medium text-slate-300 leading-relaxed font-mono">
+                              {bullet}
+                            </p>
+                         </li>
+                       ))}
+                    </ul>
+                       </div>
+
+                       <div className="flex flex-col gap-6">
+                         <div className="bg-blue-500/5 p-6 rounded-2xl border border-blue-500/20 font-mono">
+                            <div className="flex items-center gap-2 mb-3">
+                               <Zap className="w-4 h-4 text-blue-400" />
+                               <h4 className="text-xs font-black uppercase tracking-widest text-slate-400">Root Cause Conclusion:</h4>
+                            </div>
+                            <p className="text-lg font-bold text-white leading-tight italic">
+                              "{audit.rootCause}"
+                            </p>
+                         </div>
+                       </div>
+                    </div>
+                 </div>
+
+                 {/* Impacted Locos Footer */}
+                 <div className="lg:col-span-12 mt-4 pt-4 border-t border-white/5 flex flex-wrap gap-3 items-center opacity-60">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mr-2">Audit Validated Across:</p>
+                    {audit.locoIds.map((lId) => (
+                      <div key={lId} className="flex items-center gap-1.5 px-2 py-0.5 bg-white/5 rounded text-[10px] text-slate-400 font-bold border border-white/5">
+                        <Shield className="w-2.5 h-2.5 text-blue-500" />
+                        LOCO {lId}
+                      </div>
+                    ))}
+                 </div>
+              </div>
+           </div>
+         </div>
+       ))}
+    </div>
+  );
+}
+
+function SmartDiagnosisWidget({ stats }: { stats: DashboardStats }) {
+  const diag = stats.smartDiagnosis;
+  if (!diag) return null;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
+      {/* Global Pattern Card */}
+      <div className="lg:col-span-12 glass-card p-6 rounded-2xl border-l-4 border-emerald-500 overflow-hidden relative shadow-2xl">
+        <div className="absolute right-0 top-0 opacity-5 -mr-8 -mt-8 pointer-events-none">
+          <Activity className="w-48 h-48" />
+        </div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-2">
+              <ShieldCheck className="w-6 h-6 text-emerald-400" />
+              <h3 className="text-lg font-black text-white uppercase tracking-tight">Global Infrastructure Pattern Analysis</h3>
+            </div>
+            <p className="text-sm text-slate-400 max-w-3xl leading-relaxed">
+              {diag.globalPattern?.explanation}
+            </p>
+          </div>
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 flex items-center gap-5 min-w-[240px] backdrop-blur-sm">
+             <div className="w-14 h-14 rounded-full border-2 border-emerald-500/30 flex items-center justify-center bg-white/5">
+                <span className="text-xl font-black text-emerald-400">{diag.globalPattern?.percentage.toFixed(1)}%</span>
+             </div>
+             <div>
+                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest leading-tight">Infrastructure Stress Rate</p>
+                <p className="text-xs font-bold text-white mt-1">{diag.globalPattern?.affectedRows.toLocaleString()} / {diag.globalPattern?.totalRows.toLocaleString()} Data Rows</p>
+             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Summary Message */}
+      <div className="lg:col-span-12 px-6 py-4 bg-blue-500/5 rounded-2xl border border-blue-500/10 flex items-center gap-4 shadow-inner">
+         <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
+            <Info className="w-5 h-5 text-blue-400" />
+         </div>
+         <p className="text-sm font-bold text-slate-200 leading-snug">
+           {diag.summary}
+         </p>
+      </div>
+
+      {/* Station Blame / Insights */}
+      <div className="lg:col-span-7 flex flex-col gap-6">
+        <div className="flex items-center justify-between px-2">
+          <h3 className="text-sm font-black text-slate-500 uppercase tracking-[0.25em] flex items-center gap-2">
+            <MapPin className="w-4 h-4" />
+            Station-Wise Blame Analysis
+          </h3>
+          <span className="text-[10px] font-bold text-slate-600 bg-white/5 px-2 py-1 rounded">MULTI-LOCO CONFIRMATION</span>
+        </div>
+        
+        <div className="grid grid-cols-1 gap-4">
+          {diag.stationInsights.map((stn, i) => (
+            <div key={i} className={cn(
+              "p-6 rounded-3xl border flex flex-col gap-5 relative overflow-hidden transition-all hover:translate-x-1 duration-300",
+              stn.severity === 'Critical' ? "bg-rose-500/10 border-rose-500/20" : "bg-amber-500/10 border-amber-500/20"
+            )}>
+              <div className="flex justify-between items-start">
+                <div className="flex items-center gap-3">
+                  <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shadow-lg font-black text-lg", 
+                    stn.severity === 'Critical' ? "bg-rose-500 text-white" : "bg-amber-500 text-black")}>
+                    {stn.stationId.slice(0, 2)}
+                  </div>
+                  <div>
+                    <h4 className={cn("text-xl font-black uppercase tracking-tighter leading-none", stn.severity === 'Critical' ? "text-rose-400" : "text-amber-400")}>
+                      {stn.stationName}
+                    </h4>
+                    <p className="text-sm font-bold text-white/90 mt-1">{stn.description}</p>
+                  </div>
+                </div>
+                <span className={cn(
+                  "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest",
+                  stn.severity === 'Critical' ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                )}>
+                  {stn.severity}
+                </span>
+              </div>
+              
+              <ul className="space-y-2.5">
+                {stn.details.map((detail, di) => (
+                  <li key={di} className="flex gap-3 text-xs font-medium text-slate-300 leading-relaxed">
+                    <span className={cn("mt-1.5 w-1.5 h-1.5 rounded-full shrink-0", stn.severity === 'Critical' ? "bg-rose-400" : "bg-amber-400")} />
+                    <span>{detail}</span>
+                  </li>
+                ))}
+              </ul>
+              
+              <div className="mt-2 pt-5 border-t border-white/5 flex flex-wrap gap-2 items-center">
+                 <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest flex-1 min-w-full mb-1">Impacted Fleet:</p>
+                 {stn.locosAffected.map((lId, li) => (
+                   <span key={li} className="px-3 py-1 bg-white/5 rounded-lg text-[10px] font-black text-slate-400 border border-white/10 uppercase">Loco {lId}</span>
+                 ))}
+              </div>
+            </div>
+          ))}
+          {diag.stationInsights.length === 0 && (
+            <div className="bg-white/5 border border-dashed border-white/10 p-10 rounded-3xl text-center">
+              <p className="text-slate-500 text-sm font-medium italic italic">No critical station-side infrastructure patterns found.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Loco & Protection Insights */}
+      <div className="lg:col-span-5 flex flex-col gap-6">
+        <h3 className="text-sm font-black text-slate-500 uppercase tracking-[0.25em] px-2 flex items-center gap-2">
+          <Activity className="w-4 h-4" />
+          Loco & Safety Protection
+        </h3>
+        
+        <div className="space-y-5">
+          {/* Hardware Alerts */}
+          {diag.locoInsights.map((loco, i) => (
+            <div key={i} className="p-6 rounded-3xl bg-blue-500/10 border border-blue-500/20 border-l-8 border-blue-500 shadow-xl relative overflow-hidden group">
+               <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                 <Settings className="w-12 h-12 text-blue-400" />
+               </div>
+               <div className="flex justify-between items-center mb-4 relative z-10">
+                 <h4 className="text-xs font-black text-blue-400 uppercase tracking-widest">Loco Side Fault: {loco.locoId}</h4>
+               </div>
+               <p className="text-lg font-black text-white leading-tight mb-2 relative z-10">{loco.issue}</p>
+               <p className="text-sm font-medium text-slate-400 italic mb-6 relative z-10">{loco.context}</p>
+               <div className="p-4 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-md relative z-10">
+                  <div className="flex items-center gap-2 mb-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <p className="text-[10px] font-black text-blue-300 uppercase tracking-widest">Expert Action Plan</p>
+                  </div>
+                  <p className="text-xs font-bold text-slate-200 leading-relaxed">{loco.recommendation}</p>
+               </div>
+            </div>
+          ))}
+
+          {/* Protection Events (ReadEndCollision) */}
+          {diag.protectionEvents.map((pe, i) => (
+            <div key={i} className="p-6 rounded-3xl bg-emerald-500/10 border border-emerald-500/20 border-l-8 border-emerald-500 shadow-xl relative overflow-hidden group">
+               <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                 <ShieldCheck className="w-12 h-12 text-emerald-400" />
+               </div>
+               <div className="flex justify-between items-center mb-4 relative z-10">
+                 <h4 className="text-xs font-black text-emerald-400 uppercase tracking-widest">Safety Intervention</h4>
+                 <span className="text-[10px] font-black font-mono text-slate-500">{pe.time}</span>
+               </div>
+               <div className="mb-4 relative z-10">
+                 <p className="text-lg font-black text-white tracking-tight">{pe.event}</p>
+                 <p className="text-sm text-slate-400 mt-1 font-medium italic">
+                    Detected at <span className="text-white font-black">{formatStationName(pe.stationId)}</span> (Loco {pe.locoId})
+                 </p>
+               </div>
+               <div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20 flex gap-3 relative z-10 shadow-lg">
+                 <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                 <p className="text-xs font-bold text-emerald-200/90 leading-relaxed">
+                   {pe.analysis}
+                 </p>
+               </div>
+            </div>
+          ))}
+
+          {diag.locoInsights.length === 0 && diag.protectionEvents.length === 0 && (
+             <div className="bg-white/5 border border-white/5 p-10 rounded-3xl text-center">
+                <p className="text-slate-500 text-sm font-medium italic">No active locomotive hardware faults or safety protection alerts identified.</p>
+             </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: DashboardStats; tagSearch: string; setTagSearch: (v: string) => void }) {
   const filteredTags = stats.tagLinkIssues.filter(t => 
     (t.info || '').toLowerCase().includes((tagSearch || '').toLowerCase()) || 
@@ -2186,316 +2763,432 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
 
   return (
     <div className="space-y-8">
-      {/* Mode Degradation */}
-      <div className="glass-card p-6 rounded-2xl">
-        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-          <Activity className="w-5 h-5 text-rose-400" />
-          Mode Degradation Events
-        </h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
-              <tr>
-                <th className="pb-3 px-4">Time</th>
-                <th className="pb-3 px-4">Loco No</th>
-                <th className="pb-3 px-4">Station</th>
-                <th className="pb-3 px-4">Direction</th>
-                <th className="pb-3 px-4">From</th>
-                <th className="pb-3 px-4">To</th>
-                <th className="pb-3 px-4">Reason</th>
-                <th className="pb-3 px-4">LP Response</th>
-              </tr>
-            </thead>
-            <tbody className="text-slate-300">
-              {stats.modeDegradations.length > 0 ? stats.modeDegradations.map((d, i) => (
-                <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                  <td className="py-3 px-4 font-mono text-xs">{d.time}</td>
-                  <td className="py-3 px-4 font-mono text-emerald-400 font-bold">{d.locoId}</td>
-                  <td className="py-3 px-4 text-white">
-                    {formatStationName(d.stationId) !== 'N/A' && (
-                      <div className="font-bold">
-                        {formatStationName(d.stationId)}
-                      </div>
-                    )}
-                    {d.stationName && d.stationName !== 'N/A' && d.stationName !== '-' && d.stationName !== '0' && (
-                      <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-tight">
-                        {formatStationName(d.stationName) !== 'N/A' ? formatStationName(d.stationName) : ''}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-4">
-                    {d.direction && d.direction !== 'N/A' && (
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${d.direction.toLowerCase().includes('nom') ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
-                        {d.direction}
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4"><span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-[10px] font-bold">{d.from}</span></td>
-                  <td className="py-3 px-4"><span className="px-2 py-0.5 bg-rose-500/20 text-rose-400 rounded text-[10px] font-bold">{d.to}</span></td>
-                  <td className="py-3 px-4 font-semibold text-rose-300">
-                    <span className="text-slate-500 text-[10px] block uppercase mb-0.5">Reason</span>
-                    {d.reason}
-                  </td>
-                  <td className="py-3 px-4 italic text-slate-400 text-xs">{d.lpResponse}</td>
-                </tr>
-              )) : (
-                <tr><td colSpan={6} className="py-8 text-center text-slate-500">No mode degradation events detected.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* NMS Health Audit */}
-      {stats.nmsLocoStats && stats.nmsLocoStats.length > 0 && (
-        <div className="glass-card p-6 rounded-3xl border border-white/5">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-emerald-400" />
-            NMS Health Audit (Hardware Fault Detection)
+      {/* #2 Technical Audit Narrative Report (Deep Event Analysis) */}
+      {/* #1 Mode Degradation Events */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between px-2">
+          <h3 className="text-sm font-black text-slate-500 uppercase tracking-[0.25em] flex items-center gap-2">
+            <Activity className="w-5 h-5 text-rose-400" />
+            1. Mode Degradation Events
           </h3>
-          <p className="text-sm text-slate-400 mb-6">
-            NMS Health indicates the internal diagnostic status of the Loco Vital Computer (LVC). A value of '0' means healthy. High error percentages indicate hardware module failures (e.g., BIU Interface, RFID Reader) or internal communication issues.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
-                <tr>
-                  <th className="pb-3 px-4">Loco ID</th>
-                  <th className="pb-3 px-4 text-right">Total Records</th>
-                  <th className="pb-3 px-4 text-right">Errors (Non-Zero)</th>
-                  <th className="pb-3 px-4 text-right">Error %</th>
-                  <th className="pb-3 px-4">Status</th>
-                </tr>
-              </thead>
-              <tbody className="text-slate-300">
-                {stats.nmsLocoStats.map((d, i) => (
-                  <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                    <td className="py-3 px-4 font-bold text-white">{d.locoId}</td>
-                    <td className="py-3 px-4 text-right font-mono text-xs">{d.totalRecords.toLocaleString()}</td>
-                    <td className="py-3 px-4 text-right font-mono text-xs text-rose-400">{d.errors.toLocaleString()}</td>
-                    <td className="py-3 px-4 text-right font-mono text-xs font-bold">{d.errorPercentage}%</td>
-                    <td className="py-3 px-4">
-                      <span className={cn(
-                        "px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider",
-                        d.category.includes('Critical') ? "bg-rose-500/20 text-rose-400" :
-                        d.category.includes('High') ? "bg-amber-500/20 text-amber-400" :
-                        "bg-emerald-500/20 text-emerald-400"
-                      )}>
-                        {d.category}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-               <h4 className="text-sm font-bold text-white mb-2">Technical Conclusion</h4>
-               <p className="text-xs text-slate-400 leading-relaxed">
-                 Continuous '8' or '16' codes are early warnings of specific card failures (e.g., Input Output Card or Communication Card). Locos in the "Critical" or "High" categories require immediate maintenance attention.
-               </p>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-               <h4 className="text-sm font-bold text-white mb-2">Impact on System</h4>
-               <p className="text-xs text-slate-400 leading-relaxed">
-                 When NMS Health is not '0', it can cause the Kavach system to downgrade from Full Supervision (FS) to Staff Responsible (SR) or Isolate mode, and can also increase radio packet drops.
-               </p>
-            </div>
-          </div>
+          <span className="text-[10px] font-bold text-slate-600 bg-white/5 px-2 py-1 rounded">ROOT CAUSE ANALYSIS ACTIVE</span>
+        </div>
 
-          {/* Deep Analysis Table */}
-          {stats.nmsDeepAnalysis && stats.nmsDeepAnalysis.length > 0 && (
-            <div className="mt-8">
-              <h4 className="text-sm font-bold text-white mb-4 uppercase tracking-wider text-slate-400">Continuous Error Events (Deep Analysis)</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
-                    <tr>
-                      <th className="pb-3 px-4">Loco ID</th>
-                      <th className="pb-3 px-4">Station</th>
-                      <th className="pb-3 px-4">Time Range</th>
-                      <th className="pb-3 px-4">Code</th>
-                      <th className="pb-3 px-4">Error Type</th>
-                      <th className="pb-3 px-4">Count</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-300">
-                    {stats.nmsDeepAnalysis.slice(0, 15).map((d, i) => (
-                      <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                        <td className="py-3 px-4 font-bold text-white">{d.locoId}</td>
-                        <td className="py-3 px-4">
-                          {formatStationName(d.stationId) !== 'N/A' && (
-                            <div className="font-bold">{formatStationName(d.stationId)}</div>
-                          )}
-                          {d.stationName && d.stationName !== 'N/A' && d.stationName !== '-' && d.stationName !== '0' && (
-                            <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-tight">
-                              {formatStationName(d.stationName)}
-                            </div>
-                          )}
-                          {formatStationName(d.stationId) === 'N/A' && (!d.stationName || d.stationName === 'N/A' || d.stationName === '-' || d.stationName === '0') && (
-                            <span className="text-slate-500">-</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 font-mono text-xs">
-                          {d.startTime.split(' ')[1]} - {d.endTime.split(' ')[1]}
-                        </td>
-                        <td className="py-3 px-4 font-mono text-rose-400 font-bold">{d.errorCode}</td>
-                        <td className="py-3 px-4">
-                          <div className="font-bold text-white">{d.errorType}</div>
-                          <div className="text-[10px] text-slate-400 mt-0.5 max-w-xs truncate" title={d.description}>{d.description}</div>
-                        </td>
-                        <td className="py-3 px-4 font-mono text-xs text-amber-400">{d.count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        <div className="grid grid-cols-1 gap-6">
+          {stats.modeDegradations.length > 0 ? stats.modeDegradations.map((d, i) => (
+            <div key={i} className={cn(
+              "glass-card p-0 rounded-3xl border-l-8 overflow-hidden transition-all hover:translate-x-1 duration-300",
+              d.severity === 'critical' ? "border-rose-500" : d.severity === 'warning' ? "border-amber-500" : "border-blue-500"
+            )}>
+              {/* Card Header: Time & Location */}
+              <div className="px-6 py-4 bg-white/5 border-b border-white/5 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Timeline</span>
+                    <span className="text-white font-mono font-bold">{d.time}</span>
+                  </div>
+                  <div className="h-8 w-px bg-white/10" />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Locality</span>
+                    <StationDisplay id={d.stationId} name={d.stationName} />
+                  </div>
+                  <div className="h-8 w-px bg-white/10" />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Telemetry</span>
+                    <span className="text-emerald-400 font-bold tracking-tight">{d.speed} Kmph | {d.direction}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                   <div className="flex items-center bg-black/40 rounded-xl px-4 py-2 border border-white/5 shadow-inner">
+                      <span className="text-xs font-black text-emerald-400 uppercase tracking-widest mr-3">{d.from}</span>
+                      <ArrowRight className="w-4 h-4 text-slate-600 mr-3" />
+                      <span className="text-xs font-black text-rose-400 uppercase tracking-widest">{d.to}</span>
+                   </div>
+                </div>
               </div>
+
+              {/* Card Body: Context & Root Cause */}
+              <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div className="lg:col-span-4 flex flex-col gap-4">
+                   <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Kavach Context</h4>
+                   <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
+                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">Loco ID</p>
+                         <p className="text-xs font-black text-emerald-400">{d.locoId}</p>
+                      </div>
+                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
+                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">Radio</p>
+                         <p className="text-xs font-black text-blue-400">{d.radio || 'N/A'}</p>
+                      </div>
+                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
+                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">EMR Status</p>
+                         <p className="text-xs font-black text-rose-400 truncate">{d.emrStatus || 'None'}</p>
+                      </div>
+                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
+                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">NMS Code</p>
+                         <p className="text-xs font-black text-amber-400">{d.nmsAtEvent || '0'}</p>
+                      </div>
+                   </div>
+                   <div className="bg-white/5 p-3 rounded-lg border border-white/5">
+                      <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">Tag Link Payload</p>
+                      <p className="text-[10px] font-mono text-slate-300 leading-tight italic">{d.tagLinkAtEvent || '-'}</p>
+                   </div>
+                </div>
+
+                <div className="lg:col-span-8 space-y-6">
+                   <div>
+                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                        <ShieldAlert className="w-3 h-3 text-rose-400" />
+                        Root Cause Conclusion
+                      </h4>
+                      <div className="bg-rose-500/5 border border-rose-500/10 p-5 rounded-2xl relative group/rc">
+                         <p className="text-base font-bold text-white leading-relaxed italic pr-8">
+                           "{d.rootCause}"
+                         </p>
+                         <div className="mt-4 flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-slate-500 border-t border-white/5 pt-4">
+                            <span>Detected Trigger: {d.reason}</span>
+                            <span className="ml-auto opacity-40">System Response: {d.lpResponse}</span>
+                         </div>
+                      </div>
+                   </div>
+
+                   <div className="bg-blue-500/10 border border-blue-500/20 p-5 rounded-2xl flex gap-4 items-start shadow-xl">
+                      <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
+                         <Settings className="w-5 h-5 text-blue-400" />
+                      </div>
+                      <div>
+                         <h5 className="text-xs font-black text-blue-300 uppercase tracking-widest mb-1">Required Action Plan</h5>
+                         <p className="text-sm font-bold text-slate-200 leading-relaxed">
+                           {d.actionRequired}
+                         </p>
+                      </div>
+                   </div>
+                </div>
+              </div>
+            </div>
+          )) : (
+            <div className="bg-white/5 border border-dashed border-white/10 p-12 rounded-3xl text-center">
+              <Activity className="w-10 h-10 text-slate-700 mx-auto mb-4" />
+              <p className="text-slate-500 text-sm font-medium italic">No critical mode degradation events detected in the current telemetry sequence.</p>
             </div>
           )}
         </div>
-      )}
+      </div>
 
-      <div className="grid grid-cols-2 gap-8">
-        {/* Brake Applications */}
-        <div className="glass-card p-6 rounded-2xl">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* #2 Brake Applications by Kavach */}
+        <div className="glass-card p-6 rounded-2xl border-t-2 border-amber-500/30">
           <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
             <Zap className="w-5 h-5 text-amber-400" />
-            Brake Applications by Kavach
+            2. Brake Applications by Kavach
           </h3>
           <div className="space-y-3">
             {stats.brakeApplications.length > 0 ? stats.brakeApplications.map((b, i) => (
-              <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center">
+              <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center group hover:bg-white/10 transition-all">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase">Loco {b.locoId}</span>
-                    <p className="text-xs font-bold text-white">{b.type}</p>
+                    <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase tracking-tighter">Loco {b.locoId}</span>
+                    <p className="text-xs font-bold text-white uppercase tracking-tight">{b.type}</p>
                   </div>
-                  <p className="text-[10px] text-slate-500">
+                  <div className="text-[10px] text-slate-500 font-medium">
                     {b.time} | Loc: {b.location}
-                    {formatStationName(b.stationId) !== 'N/A' && (
-                      <span className="ml-2 text-emerald-400 font-bold uppercase">
-                        @ {formatStationName(b.stationId)}
-                      </span>
-                    )}
-                  </p>
+                    <span className="ml-2 text-emerald-400 font-bold uppercase inline-flex items-center gap-1">
+                      @ <StationDisplay id={b.stationId} name={b.stationName} />
+                    </span>
+                  </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-amber-400">{b.speed} Kmph</p>
+                  <p className="text-sm font-bold text-amber-400 tabular-nums">{b.speed} Kmph</p>
                 </div>
               </div>
-            )) : <p className="text-center py-4 text-slate-500 text-sm">No brake applications logged.</p>}
+            )) : <p className="text-center py-8 text-slate-500 text-sm italic">No brake applications recorded.</p>}
           </div>
         </div>
 
         {/* SOS Events */}
-        <div className="glass-card p-6 rounded-2xl">
+        <div className="glass-card p-6 rounded-2xl border-t-2 border-rose-600/30">
           <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-rose-500" />
-            SOS Events
+            3. SOS Emergency Events
           </h3>
           <div className="space-y-3">
             {stats.sosEvents.length > 0 ? stats.sosEvents.map((s, i) => (
-              <div key={i} className="bg-rose-500/10 p-4 rounded-xl border border-rose-500/20 flex justify-between items-center">
+              <div key={i} className="bg-rose-500/5 p-4 rounded-xl border border-rose-500/10 flex justify-between items-center group hover:bg-rose-500/10 transition-all">
                 <div>
-                  <p className="text-xs font-bold text-rose-400">SOS Triggered</p>
-                  <p className="text-[10px] text-slate-500">{s.time} | Source: {s.source}</p>
+                  <p className="text-xs font-bold text-rose-400 uppercase tracking-widest">SOS Triggered</p>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    {s.time} | Source: {s.source} 
+                    <span className="ml-2 text-rose-300 font-bold uppercase tracking-tight">@ <StationDisplay id={s.stationId} name={s.stationName} showEmerald={false} /></span>
+                  </div>
                 </div>
                 <div className="text-right">
-                  <span className="px-2 py-1 bg-rose-500 text-white rounded text-[10px] font-bold uppercase tracking-tighter">Critical</span>
+                  <span className="px-2 py-1 bg-rose-600 text-white rounded text-[10px] font-black uppercase tracking-widest shadow-lg shadow-rose-600/20">Critical</span>
                 </div>
               </div>
-            )) : <p className="text-center py-4 text-slate-500 text-sm">No SOS events detected.</p>}
+            )) : <p className="text-center py-8 text-slate-500 text-sm italic">No SOS emergency events detected.</p>}
           </div>
         </div>
       </div>
 
+      {/* #4 Emergency Status Reports (Non-Regular) */}
+      <div className="glass-card p-6 rounded-2xl border-t-4 border-rose-500 bg-rose-500/5">
+        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+          <ShieldAlert className="w-5 h-5 text-rose-500" />
+          4. Emergency Status Reports (Non-Regular Monitoring)
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {stats.emergencyStatusEvents.length > 0 ? stats.emergencyStatusEvents.map((emr, i) => (
+            <div key={i} className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden group hover:border-rose-500/40 transition-all duration-300 shadow-xl shadow-rose-500/5">
+              <div className="bg-rose-500/15 px-4 py-3 border-b border-white/5 flex justify-between items-center">
+                <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest">{emr.status}</span>
+                <span className="text-[10px] font-bold text-slate-500 italic">#{emr.rowCount} packets</span>
+              </div>
+              <div className="p-4 space-y-4">
+                <div className="flex justify-between items-start">
+                   <div className="space-y-1">
+                      <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest">Loco Unit</p>
+                      <p className="text-sm font-bold text-white font-mono">{emr.locoId}</p>
+                   </div>
+                   <div className="text-right space-y-1">
+                      <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest">Station Context</p>
+                      <div className="text-xs font-bold text-emerald-400 uppercase tracking-tight">
+                         <StationDisplay id={emr.stationId} name={emr.stationName} />
+                      </div>
+                   </div>
+                </div>
+                
+                <div className="pt-3 border-t border-white/5 grid grid-cols-2 gap-4">
+                   <div className="space-y-1">
+                      <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest">Onset Time</p>
+                      <p className="text-[11px] font-mono text-amber-400/90">{emr.startTime}</p>
+                   </div>
+                   <div className="text-right space-y-1">
+                      <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest">Recovery Time</p>
+                      <p className="text-[11px] font-mono text-rose-400/90">{emr.endTime}</p>
+                   </div>
+                </div>
+              </div>
+            </div>
+          )) : (
+            <div className="col-span-full py-12 text-center bg-white/5 rounded-2xl border border-dashed border-white/10">
+              <p className="text-slate-500 font-medium italic text-sm">No Non-Regular Emergency Status events identified in the current analytical window.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* #6 Root Cause & Pattern Analysis (Smart Diagnosis) */}
+      <div className="pt-8 border-t border-white/10">
+        <SmartDiagnosisWidget stats={stats} />
+      </div>
+
+      {/* #7 NMS Health Audit */}
+      {stats.nmsLocoStats && stats.nmsLocoStats.length > 0 && (
+          <div className="glass-card p-6 rounded-3xl border border-white/5">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Activity className="w-5 h-5 text-emerald-400" />
+              NMS Health Audit (Hardware Fault Detection)
+            </h3>
+            <p className="text-sm text-slate-400 mb-6">
+              NMS Health indicates the internal diagnostic status of the Loco Vital Computer (LVC). A value of '0' means healthy. High error percentages indicate hardware module failures (e.g., BIU Interface, RFID Reader) or internal communication issues.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
+                  <tr>
+                    <th className="pb-3 px-4">Loco ID</th>
+                    <th className="pb-3 px-4 text-right">Total Records</th>
+                    <th className="pb-3 px-4 text-right">Errors (Non-Zero)</th>
+                    <th className="pb-3 px-4 text-right">Error %</th>
+                    <th className="pb-3 px-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="text-slate-300">
+                  {stats.nmsLocoStats.map((d, i) => (
+                    <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                      <td className="py-3 px-4 font-bold text-white">{d.locoId}</td>
+                      <td className="py-3 px-4 text-right font-mono text-xs">{d.totalRecords.toLocaleString()}</td>
+                      <td className="py-3 px-4 text-right font-mono text-xs text-rose-400">{d.errors.toLocaleString()}</td>
+                      <td className="py-3 px-4 text-right font-mono text-xs font-bold">{d.errorPercentage}%</td>
+                      <td className="py-3 px-4">
+                        <span className={cn(
+                          "px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider",
+                          d.category.includes('Critical') ? "bg-rose-500/20 text-rose-400" :
+                          d.category.includes('High') ? "bg-amber-500/20 text-amber-400" :
+                          "bg-emerald-500/20 text-emerald-400"
+                        )}>
+                          {d.category}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                 <h4 className="text-sm font-bold text-white mb-2">Technical Conclusion</h4>
+                 <p className="text-xs text-slate-400 leading-relaxed">
+                   Continuous '8' or '16' codes are early warnings of specific card failures (e.g., Input Output Card or Communication Card). Locos in the "Critical" or "High" categories require immediate maintenance attention.
+                 </p>
+              </div>
+              <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                 <h4 className="text-sm font-bold text-white mb-2">Impact on System</h4>
+                 <p className="text-xs text-slate-400 leading-relaxed">
+                   When NMS Health is not '0', it can cause the Kavach system to downgrade from Full Supervision (FS) to Staff Responsible (SR) or Isolate mode, and can also increase radio packet drops.
+                 </p>
+              </div>
+            </div>
+
+            {/* Deep Analysis Table */}
+            {stats.nmsDeepAnalysis && stats.nmsDeepAnalysis.length > 0 && (
+              <div className="mt-8">
+                <h4 className="text-sm font-bold text-white mb-4 uppercase tracking-wider text-slate-400">Continuous Error Events (Deep Analysis)</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
+                      <tr>
+                        <th className="pb-3 px-4">Loco ID</th>
+                        <th className="pb-3 px-4">Station</th>
+                        <th className="pb-3 px-4">Time Range</th>
+                        <th className="pb-3 px-4">Code</th>
+                        <th className="pb-3 px-4">Error Type</th>
+                        <th className="pb-3 px-4">Count</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-300">
+                      {stats.nmsDeepAnalysis.slice(0, 15).map((d, i) => (
+                        <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                          <td className="py-3 px-4 font-bold text-white">{d.locoId}</td>
+                          <td className="py-3 px-4">
+                            <StationDisplay id={d.stationId} name={d.stationName} />
+                          </td>
+                          <td className="py-3 px-4 font-mono text-xs">
+                            {d.startTime.split(' ')[1]} - {d.endTime.split(' ')[1]}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-rose-400 font-bold">{d.errorCode}</td>
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-white">{d.errorType}</div>
+                            <div className="text-[10px] text-slate-400 mt-0.5 max-w-xs truncate" title={d.description}>{d.description}</div>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-xs text-amber-400">{d.count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+      )}
+
       <div className="grid grid-cols-2 gap-8">
-        {/* Signal Overrides */}
-        <div className="glass-card p-6 rounded-2xl">
+        {/* #8 Signal Overrides */}
+        <div className="glass-card p-6 rounded-2xl border-l-4 border-blue-500/50">
           <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
             <Shield className="w-5 h-5 text-blue-400" />
-            Signal Override Cases
+            Signal Override Cases (Authority Violations)
           </h3>
           <div className="space-y-3">
             {stats.signalOverrides.length > 0 ? stats.signalOverrides.map((s, i) => (
-              <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center">
+              <div key={i} className="bg-slate-900 border border-white/5 p-4 rounded-xl flex justify-between items-center group hover:border-blue-500/30 transition-all">
                 <div>
-                  <p className="text-xs font-bold text-white">Signal ID: {s.signalId}</p>
-                  <p className="text-[10px] text-slate-500">{s.time}</p>
+                  <p className="text-xs font-black text-blue-400 uppercase tracking-widest mb-1">Signal ID: {s.signalId}</p>
+                  <div className="text-[10px] text-slate-500 font-semibold italic">
+                    {s.time} @ <StationDisplay id={s.stationId} name={s.stationName} showEmerald={false} />
+                  </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-xs font-bold text-blue-400">{s.status}</span>
+                  <span className="text-xs font-black text-blue-400 bg-blue-500/10 px-3 py-1 rounded-full uppercase tracking-tighter ring-1 ring-blue-500/20">{s.status}</span>
                 </div>
               </div>
-            )) : <p className="text-center py-4 text-slate-500 text-sm">No signal override cases found.</p>}
+            )) : <p className="text-center py-8 text-slate-500 text-sm italic">No signal override violations detected.</p>}
           </div>
         </div>
 
-        {/* Loco Length Variations (TRNMSNMA) */}
-        <div className="glass-card p-6 rounded-2xl border-t-4 border-amber-500 col-span-2">
+        {/* Tag Tracking Control */}
+        <div className="glass-card p-6 rounded-2xl border-l-4 border-emerald-500/50 text-emerald-400">
           <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <Settings className="w-5 h-5 text-amber-400" />
-            Loco Length Variations (TRNMSNMA)
+            <Tag className="w-5 h-5 text-emerald-400" />
+            Tag Link Audit Control
           </h3>
           <div className="space-y-4">
-            <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-              <p className="text-xs text-slate-400 uppercase font-bold mb-4">Unique Lengths Detected with Context</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {stats.uniqueTrainLengths.length > 0 ? stats.uniqueTrainLengths.map((item, i) => (
-                  <div key={i} className={cn(
-                    "p-3 rounded-xl border flex flex-col gap-1",
-                    stats.uniqueTrainLengths.length > 1 ? "bg-rose-500/10 border-rose-500/20" : "bg-emerald-500/10 border-emerald-500/20"
-                  )}>
-                    <div className="flex justify-between items-center">
-                      <span className={cn(
-                        "text-lg font-bold",
-                        stats.uniqueTrainLengths.length > 1 ? "text-rose-400" : "text-emerald-400"
-                      )}>{item.length} m</span>
-                      <span className="text-[10px] font-mono text-slate-500">{item.time}</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-[10px] text-slate-400">
-                      <MapPin className="w-3 h-3" />
-                      <span>Station: {formatStationName(item.stationId)}</span>
-                    </div>
-                  </div>
-                )) : <p className="text-slate-500 text-sm italic">No length data found</p>}
-              </div>
-              
-              {stats.uniqueTrainLengths.length > 1 && (
-                <div className="mt-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start gap-3">
-                  <AlertTriangle className="w-6 h-6 text-rose-400 shrink-0" />
-                  <div>
-                    <p className="text-sm text-rose-300 font-bold uppercase tracking-tight">Critical Alert: Multiple Train Lengths Detected</p>
-                    <p className="text-xs text-rose-400/80 mt-1">
-                      Variations in reported train length (from {stats.uniqueTrainLengths[0].length}m to {stats.uniqueTrainLengths[stats.uniqueTrainLengths.length-1].length}m) detected for Loco {stats.locoId}. 
-                      This is a critical safety concern as it affects braking distance calculations and EBD/SBD curves.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
+            <input
+              type="text"
+              placeholder="Search Tag Identity or Detail..."
+              value={tagSearch}
+              onChange={(e) => setTagSearch(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition-all"
+            />
+            <p className="text-[10px] text-slate-500 uppercase font-black tracking-[0.2em] px-1">Issues Found: {filteredTags.length}</p>
           </div>
         </div>
       </div>
 
-      {/* Medha Kavach / Tag Link Issues */}
-      <div className="glass-card p-6 rounded-2xl border-l-4 border-rose-500">
+      {/* #9 Loco Length Variations (TRNMSNMA) */}
+      <div className="glass-card p-6 rounded-2xl border-t-4 border-amber-500">
+        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+          <Settings className="w-5 h-5 text-amber-400" />
+          Loco Length (TRNMSNMA) Integrity Check
+        </h3>
+        <div className="space-y-4">
+          <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+            <p className="text-xs text-slate-400 uppercase font-bold mb-4">Unique Lengths Detected with Context</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {stats.uniqueTrainLengths.length > 0 ? stats.uniqueTrainLengths.map((item, i) => (
+                <div key={i} className={cn(
+                  "p-3 rounded-xl border flex flex-col gap-1",
+                  stats.uniqueTrainLengths.length > 1 ? "bg-rose-500/10 border-rose-500/20" : "bg-emerald-500/10 border-emerald-500/20"
+                )}>
+                  <div className="flex justify-between items-center">
+                    <span className={cn(
+                      "text-lg font-bold",
+                      stats.uniqueTrainLengths.length > 1 ? "text-rose-400" : "text-emerald-400"
+                    )}>{item.length} m</span>
+                    <span className="text-[10px] font-mono text-slate-500">{item.time}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <MapPin className="w-3 h-3" />
+                    <span>Station: {formatStationName(item.stationId)}</span>
+                  </div>
+                </div>
+              )) : <p className="text-slate-500 text-sm italic">No length data found</p>}
+            </div>
+            
+            {stats.uniqueTrainLengths.length > 1 && (
+              <div className="mt-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start gap-3">
+                <AlertTriangle className="w-6 h-6 text-rose-400 shrink-0" />
+                <div>
+                  <p className="text-sm text-rose-300 font-bold uppercase tracking-tight">Critical Alert: Multiple Train Lengths Detected</p>
+                  <p className="text-xs text-rose-400/80 mt-1">
+                    Variations in reported train length (from {stats.uniqueTrainLengths[0].length}m to {stats.uniqueTrainLengths[stats.uniqueTrainLengths.length-1].length}m) detected for Loco {stats.locoId}. 
+                    This is a critical safety concern as it affects braking distance calculations and EBD/SBD curves.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* #10 Medha Kavach / Tag Link Issues */}
+      <div className="glass-card p-6 rounded-2xl border-l-4 border-rose-500 bg-black/20">
         <div className="flex flex-col gap-6 mb-6">
           <div className="flex justify-between items-center">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <Info className="w-5 h-5 text-rose-400" />
-              Medha Kavach / Tag Link Info Issues
+              Tag Link Defects (Infrastructure Analysis)
             </h3>
             <div className="flex gap-4">
-              <div className="bg-rose-500/10 px-4 py-2 rounded-xl border border-rose-500/20">
-                <p className="text-[10px] text-slate-400 uppercase font-bold">Both Tags Missing</p>
+              <div className="bg-rose-500/10 px-4 py-2 rounded-xl border border-rose-500/20 text-center">
+                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Both Tags Missing</p>
                 <p className="text-xl font-bold text-rose-400">
                   {stats.tagLinkIssues.filter(t => t.isCritical).length}
                 </p>
               </div>
-              <div className="bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20">
-                <p className="text-[10px] text-slate-400 uppercase font-bold">Single Tag Missing</p>
+              <div className="bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20 text-center">
+                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Single Tag Missing</p>
                 <p className="text-xl font-bold text-amber-400">
                   {stats.tagLinkIssues.filter(t => !t.isCritical).length}
                 </p>
@@ -2509,25 +3202,25 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
               placeholder="Search Tag Issues (e.g. Main Tag Missing, Station ID...)"
               value={tagSearch}
               onChange={(e) => setTagSearch(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-all"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-all font-mono"
             />
             <div className="absolute right-4 top-1/2 -translate-y-1/2 flex gap-2">
               <button 
                 onClick={() => setTagSearch('Main Tag Missing')}
-                className="text-[10px] font-bold uppercase tracking-tighter bg-rose-500/20 text-rose-400 px-2 py-1 rounded hover:bg-rose-500/30 transition-all"
+                className="text-[9px] font-black uppercase tracking-tighter bg-rose-500/20 text-rose-400 px-2 py-1 rounded hover:bg-rose-500/30 transition-all"
               >
                 Find Main Missing
               </button>
               <button 
                 onClick={() => setTagSearch('Duplicate Tag Missing')}
-                className="text-[10px] font-bold uppercase tracking-tighter bg-amber-500/20 text-amber-400 px-2 py-1 rounded hover:bg-amber-500/30 transition-all"
+                className="text-[9px] font-black uppercase tracking-tighter bg-amber-500/20 text-amber-400 px-2 py-1 rounded hover:bg-amber-500/30 transition-all"
               >
                 Find Duplicate Missing
               </button>
               {tagSearch && (
                 <button 
                   onClick={() => setTagSearch('')}
-                  className="text-[10px] font-bold uppercase tracking-tighter bg-white/10 text-slate-400 px-2 py-1 rounded hover:bg-white/20 transition-all"
+                  className="text-[9px] font-black uppercase tracking-tighter bg-white/10 text-slate-400 px-2 py-1 rounded hover:bg-white/20 transition-all"
                 >
                   Clear
                 </button>
@@ -2536,59 +3229,44 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto rounded-xl border border-white/5">
           <table className="w-full text-left text-sm">
-            <thead className="text-slate-500 uppercase text-[10px] font-bold border-b border-white/5">
+            <thead className="bg-white/5 text-slate-500 uppercase text-[10px] font-black border-b border-white/10">
               <tr>
-                <th className="pb-3 px-4">Time</th>
-                <th className="pb-3 px-4">Loco No</th>
-                <th className="pb-3 px-4">Station ID</th>
-                <th className="pb-3 px-4">Diagnostic Error</th>
-                <th className="pb-3 px-4">Tag Link Info</th>
+                <th className="py-4 px-4 font-mono">Time</th>
+                <th className="py-4 px-4 font-mono">Loco No</th>
+                <th className="py-4 px-4 font-mono">Station ID</th>
+                <th className="py-4 px-4 font-mono">Diagnostic Error</th>
+                <th className="py-4 px-4 font-mono text-right">Tag Link Info</th>
               </tr>
             </thead>
             <tbody className="text-slate-300">
               {filteredTags.length > 0 ? filteredTags.map((t, i) => (
-                <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                  <td className="py-3 px-4 font-mono text-xs">{t.time}</td>
-                  <td className="py-3 px-4 font-mono text-emerald-400 font-bold">{t.locoId}</td>
-                  <td className="py-3 px-4 font-bold text-white">
-                    {formatStationName(t.stationId)}
+                <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors group">
+                  <td className="py-4 px-4 font-mono text-xs">{t.time}</td>
+                  <td className="py-4 px-4 font-mono text-emerald-400 font-bold">{t.locoId}</td>
+                  <td className="py-4 px-4 text-white">
+                     <span className="font-bold flex items-center gap-1 group-hover:text-emerald-400 transition-colors">
+                        <StationDisplay id={t.stationId} name={t.stationName} />
+                     </span>
                   </td>
-                  <td className="py-3 px-4">
+                  <td className="py-4 px-4">
+                    <p className="text-xs font-bold text-slate-300 leading-snug">{t.error}</p>
+                  </td>
+                  <td className="py-4 px-4 text-right">
                     <span className={cn(
-                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
-                      t.isCritical ? "bg-rose-500 text-white" : "bg-amber-500/20 text-amber-400"
+                      "px-2 py-1 rounded text-[10px] font-black uppercase tracking-widest",
+                      t.isCritical ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
                     )}>
-                      {t.error}
+                      {t.info}
                     </span>
                   </td>
-                  <td className="py-3 px-4 text-xs font-mono text-slate-500">{t.info}</td>
                 </tr>
               )) : (
-                <tr><td colSpan={5} className="py-8 text-center text-slate-500">No matching tag issues found.</td></tr>
+                <tr><td colSpan={5} className="py-12 text-center text-slate-500">No tag infrastructure defects detected in active registry.</td></tr>
               )}
             </tbody>
           </table>
-        </div>
-      </div>
-
-      {/* Short Packets */}
-      <div className="glass-card p-6 rounded-2xl">
-        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-          <Clock className="w-5 h-5 text-slate-400" />
-          Packet Length Analysis (Below 10 Bytes)
-        </h3>
-        <div className="grid grid-cols-4 gap-4">
-          {stats.shortPackets.length > 0 ? stats.shortPackets.map((p, i) => (
-            <div key={i} className="bg-white/5 p-3 rounded-xl border border-white/5">
-              <p className="text-[10px] font-bold text-white truncate">{p.type}</p>
-              <div className="flex justify-between items-center mt-1">
-                <span className="text-[9px] text-slate-500">{p.time}</span>
-                <span className="text-[10px] font-bold text-rose-400">Len: {p.length}</span>
-              </div>
-            </div>
-          )) : <p className="col-span-4 text-center py-4 text-slate-500 text-sm">No short packets detected.</p>}
         </div>
       </div>
     </div>
@@ -2750,6 +3428,202 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   );
 }
 
+function InfrastructureStressMeter({ stress }: { stress?: DashboardStats['infrastructureStress'] }) {
+  if (!stress) return null;
+
+  const getScoreColor = (score: number) => {
+    if (score > 60) return "text-rose-400";
+    if (score > 30) return "text-amber-400";
+    return "text-emerald-400";
+  };
+
+  const getProgressColor = (score: number) => {
+    if (score > 60) return "bg-rose-500";
+    if (score > 30) return "bg-amber-500";
+    return "bg-emerald-500";
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="glass-card p-6 rounded-2xl hover-glow transition-all"
+    >
+      <div className="flex justify-between items-center mb-6">
+        <div className="flex flex-col gap-1">
+          <h4 className="font-bold text-white text-sm uppercase tracking-widest opacity-70 flex items-center gap-2">
+            <Construction className="w-4 h-4 text-emerald-400" />
+            Infrastructure Stress Meter
+          </h4>
+          <p className="text-[10px] text-slate-500 italic">Tracking 'InterTagDist' errors (Persistence without Degradation)</p>
+        </div>
+        <div className="text-right">
+          <span className={cn("text-3xl font-black italic tracking-tighter block leading-none", getScoreColor(stress.overallScore))}>
+            {stress.overallScore.toFixed(1)}%
+          </span>
+          <span className="text-[9px] uppercase font-bold text-slate-600">Avg Strain</span>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <div className="relative pt-1">
+          <div className="flex mb-2 items-center justify-between">
+            <div>
+              <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-emerald-600 bg-emerald-200">
+                Network Fatigue
+              </span>
+            </div>
+            <div className="text-right">
+              <span className="text-xs font-semibold inline-block text-emerald-600">
+                {stress.overallScore.toFixed(0)}%
+              </span>
+            </div>
+          </div>
+          <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-emerald-200 shadow-inner">
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${stress.overallScore}%` }}
+              className={cn("shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center", getProgressColor(stress.overallScore))}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-white/5 p-4 rounded-xl border border-white/5 group hover:bg-white/10 transition-all">
+            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Tag Points Analyzed</span>
+            <span className="text-2xl font-bold text-white leading-none">{stress.totalTagTelemetry}</span>
+            <div className="w-full h-1 bg-white/10 rounded-full mt-2 overflow-hidden">
+               <div className="h-full bg-slate-500 w-full opacity-50" />
+            </div>
+          </div>
+          <div className="bg-white/5 p-4 rounded-xl border border-white/5 group hover:bg-white/10 transition-all">
+            <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Hidden Defects (ITD)</span>
+            <span className="text-2xl font-bold text-rose-400 leading-none">{stress.tagSpacingDefects}</span>
+            <div className="w-full h-1 bg-rose-500/20 rounded-full mt-2 overflow-hidden">
+               <div className="h-full bg-rose-500" style={{ width: `${stress.overallScore}%` }} />
+            </div>
+          </div>
+        </div>
+
+        {stress.stationWiseStress.length > 0 && (
+          <div className="pt-4 border-t border-white/10">
+            <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+              <MapPin className="w-3 h-3" />
+              Highest Trackside Load (By Station)
+            </h5>
+            <div className="grid grid-cols-1 gap-4">
+              {stress.stationWiseStress.slice(0, 3).map((stn, i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="w-12 text-[10px] font-black text-slate-600 truncate">{i + 1}. {stn.stationId}</div>
+                  <div className="flex-1">
+                    <div className="flex justify-between text-[10px] font-bold mb-1">
+                      <span className="text-slate-300">{formatStationName(stn.stationName || stn.stationId)}</span>
+                      <span className={getScoreColor(stn.stressScore)}>{stn.stressScore.toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${stn.stressScore}%` }}
+                        className={cn("h-full rounded-full", getProgressColor(stn.stressScore))}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        <div className="p-3 bg-white/5 rounded-xl border border-dashed border-white/10">
+           <p className="text-[10px] text-slate-400 leading-relaxed">
+             <span className="text-emerald-400 font-bold">Expert Note:</span> High stress indicates physical tag spacing issues. If stress {'>'} 70%, mode degradation is imminent during monsoon or weak signal zones.
+           </p>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function SyncConflictChart({ conflicts }: { conflicts?: DashboardStats['conflictingPackets'] }) {
+  if (!conflicts || conflicts.length === 0) return null;
+
+  const stationData = conflicts.reduce((acc, c) => {
+    const stn = c.stationName || c.stationId;
+    acc[stn] = (acc[stn] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const chartData = Object.entries(stationData)
+    .map(([name, count]) => ({ name: formatStationName(name), count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="glass-card p-6 rounded-2xl border-l-4 border-rose-500"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h4 className="font-bold text-white text-sm uppercase tracking-wider opacity-70 flex items-center gap-2">
+          <Activity className="w-4 h-4 text-rose-500" />
+          Hardware Sync Conflicts
+        </h4>
+        <div className="px-2 py-1 bg-rose-500/20 rounded text-[10px] font-bold text-rose-400 animate-pulse">
+           {conflicts.length} EVENTS
+        </div>
+      </div>
+      
+      <p className="text-[10px] text-slate-400 mb-6 leading-relaxed italic">
+        Multiple conflicting telemetry packets (Modes/NMS) received within 1 second. High probability of Radio board sync loss.
+      </p>
+
+      {chartData.length > 0 && (
+        <div className="h-[150px] mb-6">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} layout="vertical">
+              <XAxis type="number" hide />
+              <YAxis 
+                dataKey="name" 
+                type="category" 
+                width={80} 
+                tick={{ fill: '#94a3b8', fontSize: 10 }} 
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip 
+                cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', borderStyle: 'none', fontSize: '10px', color: '#fff' }}
+                itemStyle={{ color: '#fff' }}
+              />
+              <Bar dataKey="count" fill="#f43f5e" radius={[0, 4, 4, 0]} barSize={12} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+        {conflicts.slice(0, 10).map((c, i) => (
+          <div key={i} className="p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-all">
+            <div className="flex justify-between items-start mb-1">
+              <span className="text-[10px] font-bold text-rose-400">{c.time.split(' ')[1]}</span>
+              <span className="text-[9px] font-black text-slate-500 uppercase">{c.radio}</span>
+            </div>
+            <p className="text-[10px] font-bold text-white mb-1">{formatStationName(c.stationName || c.stationId)}</p>
+            <div className="flex gap-1 flex-wrap">
+               <span className="text-[9px] px-1 bg-white/5 rounded text-slate-400 uppercase font-mono">Modes: {c.modes.join('/')}</span>
+               <span className="text-[9px] px-1 bg-rose-500/10 rounded text-rose-300 font-mono">NMS: {c.nmsCodes.join('/')}</span>
+            </div>
+          </div>
+        ))}
+        {conflicts.length > 10 && (
+          <p className="text-[9px] text-center text-slate-500 pt-2 tracking-widest uppercase font-bold">+ {conflicts.length - 10} additional conflicts</p>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
 function StatusBox({ title, items }: { title: string; items: { label: string; status: string; reason: string }[] }) {
   return (
     <div className="glass-card p-6 rounded-2xl space-y-4">
@@ -2895,6 +3769,8 @@ function ExecutiveSummary({ stats, setActiveTab }: { stats: DashboardStats; setA
       </div>
 
       <div className="space-y-6 min-w-0">
+        <InfrastructureStressMeter stress={stats.infrastructureStress} />
+
         <div className="glass-card p-6 rounded-2xl">
           <h4 className="font-bold text-white text-sm mb-6 uppercase tracking-wider opacity-70">Interval Distribution</h4>
           <div className="h-[200px]">
@@ -2963,6 +3839,8 @@ function ExecutiveSummary({ stats, setActiveTab }: { stats: DashboardStats; setA
             ))}
           </div>
         </div>
+
+        <SyncConflictChart conflicts={stats.conflictingPackets} />
 
         <div className="glass-card p-6 rounded-2xl bg-emerald-500/5 border-emerald-500/20 group cursor-pointer hover:bg-emerald-500/10 transition-all" onClick={() => setActiveTab('methodology')}>
           <div className="flex items-center justify-between mb-4">
