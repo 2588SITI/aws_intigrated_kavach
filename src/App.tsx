@@ -22,6 +22,7 @@ import {
   ArrowRight,
   Zap,
   MapPin,
+  Train,
   Download,
   Wifi,
   FileText,
@@ -661,6 +662,60 @@ export default function App() {
       doc.text(`Average MA Refresh Lag: ${filteredStats.avgLag.toFixed(2)}s`, 25, 94);
 
       let currentY = 105;
+
+      // Operations Summary (Station-wise & Loco-wise)
+      if (filteredStats.stationSummary && filteredStats.stationSummary.length > 0) {
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('1.2 Station-wise Operations Summary', 20, currentY);
+        
+        const stnRows = filteredStats.stationSummary.map(s => [
+          s.stationName,
+          s.locoCount,
+          s.degradationCount,
+          s.totalBrakes,
+          s.ebCount,
+          s.fsbCount,
+          s.attribution
+        ]);
+
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Station Name', 'Locos Passed', 'Mode Deg.', 'Total Brakes', 'EB', 'FSB', 'Attribution']],
+          body: stnRows,
+          theme: 'grid',
+          headStyles: { fillColor: [16, 185, 129] }, // Emerald-500
+          styles: { fontSize: 8 },
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      if (filteredStats.locoSummary && filteredStats.locoSummary.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 20; }
+        doc.setFontSize(16);
+        doc.setTextColor(0, 102, 204);
+        doc.text('1.3 Loco-wise Performance Summary', 20, currentY);
+        
+        const locRows = filteredStats.locoSummary.map(l => [
+          l.locoId,
+          l.stationCount,
+          l.degradationCount,
+          l.totalBrakes,
+          l.ebCount,
+          l.fsbCount,
+          l.attribution
+        ]);
+
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Loco No', 'Stations Visited', 'Mode Deg.', 'Total Brakes', 'EB', 'FSB', 'Health Verdict']],
+          body: locRows,
+          theme: 'grid',
+          headStyles: { fillColor: [59, 130, 246] }, // Blue-500
+          styles: { fontSize: 8 },
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
 
       // Mode Degradation Events (Detailed Analysis) - MOVED TO #2
       if (filteredStats.modeDegradations.length > 0) {
@@ -1878,6 +1933,7 @@ export default function App() {
                   <TabButton active={activeTab === 'station'} onClick={() => setActiveTab('station')} label="Station Analysis" />
                   <TabButton active={activeTab === 'radio'} onClick={() => setActiveTab('radio')} label="Radio Analysis" />
                   <TabButton active={activeTab === 'expert'} onClick={() => setActiveTab('expert')} label="Expert Diagnostics" />
+                  <TabButton active={activeTab === 'ops'} onClick={() => setActiveTab('ops')} label="Operations Summary" />
                   <TabButton active={activeTab === 'nms'} onClick={() => setActiveTab('nms')} label="NMS" />
                   <TabButton active={activeTab === 'sync'} onClick={() => setActiveTab('sync')} label="Sync" />
                   <TabButton active={activeTab === 'interval'} onClick={() => setActiveTab('interval')} label="Interval" />
@@ -1979,6 +2035,7 @@ export default function App() {
             {activeTab === 'summary' && filteredStats && <ExecutiveSummary stats={filteredStats} setActiveTab={setActiveTab} />}
             {activeTab === 'mapping' && filteredStats && <DeepMapping stats={filteredStats} files={files} />}
             {activeTab === 'station' && filteredStats && <StationAnalysis stats={filteredStats} />}
+            {activeTab === 'ops' && filteredStats && <OperationsSummary stats={filteredStats} />}
             {activeTab === 'expert' && filteredStats && <ExpertDiagnostics stats={filteredStats} tagSearch={tagSearch} setTagSearch={setTagSearch} />}
             {activeTab === 'nms' && filteredStats && <NMSAnalysis stats={filteredStats} />}
             {activeTab === 'sync' && filteredStats && <SyncAnalysis stats={filteredStats} />}
@@ -2347,6 +2404,135 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OperationsSummary({ stats }: { stats: DashboardStats }) {
+  const stationSummary = stats.stationSummary || [];
+  const locoSummary = stats.locoSummary || [];
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="flex items-center gap-3 mb-2">
+        <MapPin className="w-8 h-8 text-emerald-400" />
+        <div>
+          <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Station-wise Operations Summary</h2>
+          <p className="text-slate-400 text-sm font-medium uppercase tracking-widest opacity-60">Aggregate view of Kavach events per station</p>
+        </div>
+      </div>
+
+      <div className="glass-card overflow-hidden rounded-3xl border border-white/5 shadow-2xl">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead className="bg-white/5 text-slate-500 uppercase text-[10px] font-black tracking-[0.2em] border-b border-white/5">
+              <tr>
+                <th className="py-5 px-6">Station Name</th>
+                <th className="py-5 px-6 text-center">Locos (Unique)</th>
+                <th className="py-5 px-6 text-center text-rose-400">Mode Deg.</th>
+                <th className="py-5 px-6 text-center">Total Brakes</th>
+                <th className="py-5 px-6 text-center text-rose-500">EB</th>
+                <th className="py-5 px-6 text-center text-amber-500">FSB</th>
+                <th className="py-5 px-6 text-right">Attribution</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-300 divide-y divide-white/5">
+              {stationSummary.map((s, i) => (
+                <tr key={i} className="hover:bg-white/[0.02] transition-colors group">
+                  <td className="py-4 px-6 font-bold text-white group-hover:text-emerald-400 transition-colors">
+                    {s.stationName}
+                  </td>
+                  <td className="py-4 px-6 text-center font-mono">{s.locoCount}</td>
+                  <td className="py-4 px-6 text-center">
+                    <span className={cn(
+                      "px-2 py-1 rounded-lg font-bold",
+                      s.degradationCount > 0 ? "bg-rose-500/20 text-rose-400" : "bg-emerald-500/10 text-emerald-400"
+                    )}>
+                      {s.degradationCount}
+                    </span>
+                  </td>
+                  <td className="py-4 px-6 text-center font-bold text-slate-400">{s.totalBrakes}</td>
+                  <td className="py-4 px-6 text-center font-black text-rose-500">{s.ebCount}</td>
+                  <td className="py-4 px-6 text-center font-black text-amber-500">{s.fsbCount}</td>
+                  <td className="py-4 px-6 text-right">
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                      s.attribution === 'Non-RF' ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    )}>
+                      {s.attribution}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {stationSummary.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-500 italic">No station summary data available. Upload RFCOMM and TRN logs.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 mt-12 mb-2">
+        <Train className="w-8 h-8 text-blue-400" />
+        <div>
+          <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Loco-wise Operations Summary</h2>
+          <p className="text-slate-400 text-sm font-medium uppercase tracking-widest opacity-60">Comparative analysis of Kavach health across locos</p>
+        </div>
+      </div>
+
+      <div className="glass-card overflow-hidden rounded-3xl border border-white/5 shadow-2xl">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead className="bg-white/5 text-slate-500 uppercase text-[10px] font-black tracking-[0.2em] border-b border-white/5">
+              <tr>
+                <th className="py-5 px-6">Loco Number</th>
+                <th className="py-5 px-6 text-center">Stations Visited</th>
+                <th className="py-5 px-6 text-center text-rose-400">Mode Deg.</th>
+                <th className="py-5 px-6 text-center">Total Brakes</th>
+                <th className="py-5 px-6 text-center text-rose-500">EB</th>
+                <th className="py-5 px-6 text-center text-amber-500">FSB</th>
+                <th className="py-5 px-6 text-right">Health Verdict / Attribution</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-300 divide-y divide-white/5">
+              {locoSummary.map((l, i) => (
+                <tr key={i} className="hover:bg-white/[0.02] transition-colors group">
+                  <td className="py-4 px-6 font-black text-emerald-400 font-mono text-lg">
+                    {l.locoId}
+                  </td>
+                  <td className="py-4 px-6 text-center font-bold">{l.stationCount}</td>
+                  <td className="py-4 px-6 text-center">
+                    <span className={cn(
+                      "px-2 py-1 rounded-lg font-bold",
+                      l.degradationCount > 2 ? "bg-rose-500/20 text-rose-400" : l.degradationCount > 0 ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/10 text-emerald-400"
+                    )}>
+                      {l.degradationCount}
+                    </span>
+                  </td>
+                  <td className="py-4 px-6 text-center font-bold text-slate-400">{l.totalBrakes}</td>
+                  <td className="py-4 px-6 text-center font-black text-rose-500">{l.ebCount}</td>
+                  <td className="py-4 px-6 text-center font-black text-amber-500">{l.fsbCount}</td>
+                  <td className="py-4 px-6 text-right">
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                      l.attribution.includes('Issue') ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    )}>
+                      {l.attribution}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {locoSummary.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-500 italic">No loco summary data available.</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

@@ -168,6 +168,11 @@ export const parseFile = async (file: File | Blob, fileName?: string): Promise<a
   });
 };
 
+const normalizeStationId = (id: any): string => {
+  if (!id || id === 'N/A' || id === '-' || id === '0' || id === '0.0') return 'N/A';
+  return String(id).toUpperCase().replace(/\s+STATION$/i, '').trim();
+};
+
 const findColumn = (row: any, ...aliases: string[]) => {
   if (!row) return null;
   const keys = Object.keys(row);
@@ -524,28 +529,28 @@ export const processDashboardData = (
   
   const stationMap: Record<string, string> = {};
   rfData.forEach(row => {
-    const id = String(row[stnIdCol] || '').trim();
+    const id = normalizeStationId(row[stnIdCol]);
     const name = String(row[stnNameCol] || '').trim();
-    if (id && id !== 'N/A' && name && name !== 'N/A') stationMap[id] = name;
+    if (id !== 'N/A' && name && name !== 'N/A') stationMap[id] = name;
   });
   rfStData.forEach(row => {
-    const id = String(row[stnIdCol] || '').trim();
+    const id = normalizeStationId(row[stnIdCol]);
     const name = String(row[stnNameCol] || '').trim();
-    if (id && id !== 'N/A' && name && name !== 'N/A') stationMap[id] = name;
+    if (id !== 'N/A' && name && name !== 'N/A') stationMap[id] = name;
   });
 
   // Pre-process TRN data to fill missing station names/IDs based on adjacent rows
   if (trnData && trnData.length > 0) {
     const trnKeys = Object.keys(trnData[0]);
-    const trnStnNameCol = findColumn(trnData[0], 'Station Name', 'StationName', 'Station_Name') || trnKeys[2];
-    const trnStnIdCol = findColumn(trnData[0], 'Station Id', 'StationId', 'Station_Id');
+    const trnStnNameCol = findColumn(trnData[0], 'Station Name', 'StationName', 'Station_Name', 'Station', 'STATION', 'StnName', 'Stn Name') || trnKeys[2];
+    const trnStnIdCol = findColumn(trnData[0], 'Station Id', 'StationId', 'Station_Id', 'Station', 'STATION', 'Stn', 'StnId', 'Stn_Id');
     const trnStnCode2Col = findColumn(trnData[0], 'Station Code2', 'StationCode2', 'Station_Code2');
 
     // Also populate stationMap from TRN data to capture stations that might not have RF data
     trnData.forEach(row => {
-      const id = String(row[trnStnIdCol] || '').trim();
+      const id = normalizeStationId(row[trnStnIdCol]);
       const name = String(row[trnStnNameCol] || '').trim();
-      if (isValidStationId(id) && !stationMap[id] && name && name !== 'N/A') {
+      if (id !== 'N/A' && !stationMap[id] && name && name !== 'N/A') {
         stationMap[id] = name;
       }
     });
@@ -859,33 +864,24 @@ export const processDashboardData = (
     const effectiveSource = source;
 
     const sIdCol = findInRow('Station Id', 'StationId', 'Station_Id', 'Station', 'Stn', 'StnId', 'Stn_Id', 'Station Name', 'StationName');
-    let stnId = '';
-    
-    // Priority 1: Explicit column match
-    if (sIdCol) {
-      stnId = String(row[sIdCol] || '').trim();
-    }
+    let stnId = normalizeStationId(sIdCol ? row[sIdCol] : '');
     
     // Priority 2: Extracted from filename (very reliable for station logs)
-    const isGeneric = !stnId || ['STATION', 'STN', 'PROJECT', 'SYSTEM'].includes(stnId.toUpperCase());
+    const isGeneric = !stnId || stnId === 'N/A' || ['STATION', 'STN', 'PROJECT', 'SYSTEM'].includes(stnId);
     if (isGeneric && row['_extractedStationId']) {
-      stnId = String(row['_extractedStationId']).trim();
+      stnId = normalizeStationId(row['_extractedStationId']);
     }
     
     // Priority 3: Fallback
-    if (!stnId && !sIdCol && keys.length > 0) {
+    if ((!stnId || stnId === 'N/A') && !sIdCol && keys.length > 0) {
       const fallbackId = String(row[keys[0]] || '').trim();
       const blacklist = ['project', 'system', 'log', 'report', 'date', 'time', 'loco', 'train'];
       if (fallbackId && !blacklist.some(b => fallbackId.toLowerCase().includes(b))) {
-        stnId = fallbackId;
+        stnId = normalizeStationId(fallbackId);
       }
     }
     
-    // NORMALIZATION FIX:
-    // Ensure "ST" and "ST STATION" are merged into the same key
-    stnId = stnId.toUpperCase().replace(/\s+STATION$/i, '').trim();
-
-    if (!stnId || stnId === 'STATION ID' || stnId === 'STATIONID') {
+    if (stnId === 'N/A' || stnId === 'STATION ID' || stnId === 'STATIONID') {
       skippedRfRows++;
       return;
     }
@@ -1252,16 +1248,30 @@ export const processDashboardData = (
   let trnStnInfo: { id: string, name: string }[] = [];
   
   const trnTagLinkCol = findColumn(firstTrn, 'Tag Link Info', 'TagLinkInfo', 'TagInfo') || trnKeys[17] || 'Tag Link Info';
-  const diagStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
-  const diagStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name', 'STATION') || trnKeys[2];
+  const diagStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id', 'Station', 'STATION', 'Stn', 'StnId', 'Stn_Id') || 'Station Id';
+  const diagStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name', 'Station', 'STATION', 'StnName', 'Stn Name') || trnKeys[2];
+  const trnLocCol = findColumn(firstTrn, 'Location', 'Km', 'Position', 'Distance') || trnKeys[6] || 'Location';
 
   if (trnData) {
     // Forward-fill stationId and stationName for TRN data
     let lastSeenStnId = 'N/A';
     let lastSeenStnName = 'N/A';
     trnStnInfo = trnData.map(row => {
-      const sId = String(row[diagStnIdCol] || '').trim();
-      const sName = String(row[diagStnNameCol] || '').trim();
+      let sId = String(row[diagStnIdCol] || '').trim();
+      let sName = String(row[diagStnNameCol] || '').trim();
+
+      // Fallback: Extract from Location KM string if station columns are empty (e.g. "120 @ VR STATION")
+      if ((!sId || sId === 'N/A') && (!sName || sName === 'N/A')) {
+        const loc = String(row[trnLocCol] || '');
+        if (loc.includes('@')) {
+          const parts = loc.split('@');
+          const candidate = parts[parts.length - 1].trim();
+          if (candidate && candidate.length > 2 && candidate.length < 40) {
+            sId = candidate;
+            sName = candidate;
+          }
+        }
+      }
 
       if (sId && sId !== 'N/A' && sId !== '-' && sId !== '0' && sId !== '0.0') {
         lastSeenStnId = sId;
@@ -2058,7 +2068,7 @@ export const processDashboardData = (
   let lastConfig: Record<string, string> = {};
   
   trnData?.forEach(row => {
-    const rowStnId = String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A');
+    const rowStnId = String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id', 'Station', 'STATION') || ''] || 'N/A');
     configParams.forEach(param => {
       const col = findColumn(row, param);
       if (col) {
@@ -2193,7 +2203,7 @@ export const processDashboardData = (
       if (Object.keys(packets).length > 0) {
         stationRadioPackets.push({
           time: getTrnTime(row),
-          stationId: String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A'),
+          stationId: String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id', 'Station', 'STATION') || ''] || 'N/A'),
           packets,
           locoId: String(row[trnLocoIdCol] || locoId).trim()
         });
@@ -2716,7 +2726,7 @@ export const processDashboardData = (
             if (!exists) {
               let stnName = String(row[trnKeys[2]] || row[trnKeys[32]] || row[trnKeys[1]] || row[trnKeys[3]] || row[trnKeys[31]] || '').trim();
               const locoNo = getBestLocoIdFromRow(row, trnKeys, locoId);
-              let stnId = String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id') || ''] || 'N/A');
+              let stnId = String(row[findColumn(row, 'Station Id', 'StationId', 'Station_Id', 'Station', 'STATION') || ''] || 'N/A');
 
               // If station info is missing, try to find it from RF data near this time
               if ((!stnName || stnName === 'N/A' || stnName === '-') && (!stnId || stnId === 'N/A' || stnId === '-')) {
@@ -3317,10 +3327,22 @@ export const processDashboardData = (
   });
 
   const allStnIdentifiers = new Set<string>();
-  stnPerf.forEach(s => allStnIdentifiers.add(String(s.stationId).toUpperCase()));
-  badStns.forEach(s => allStnIdentifiers.add(String(s).toUpperCase()));
-  goodStns.forEach(s => allStnIdentifiers.add(String(s).toUpperCase()));
-  if (stationStats) stationStats.forEach(s => allStnIdentifiers.add(String(s.stationId).toUpperCase()));
+  stnPerf.forEach(s => {
+    const id = normalizeStationId(s.stationId);
+    if (id !== 'N/A') allStnIdentifiers.add(id);
+  });
+  badStns.forEach(s => {
+    const id = normalizeStationId(s);
+    if (id !== 'N/A') allStnIdentifiers.add(id);
+  });
+  goodStns.forEach(s => {
+    const id = normalizeStationId(s);
+    if (id !== 'N/A') allStnIdentifiers.add(id);
+  });
+  if (stationStats) stationStats.forEach(s => {
+    const id = normalizeStationId(s.stationId);
+    if (id !== 'N/A') allStnIdentifiers.add(id);
+  });
 
   // --- Smart Diagnosis Discovery ---
   let interTagDistAffectedRows = 0;
@@ -3901,6 +3923,145 @@ export const processDashboardData = (
     }
   }
 
+  // 10. Generate Station Summary
+  const stationSummaryMap: Record<string, any> = {};
+  
+  // A station is valid if it has RF logs OR Mode Degradations OR Brake Applications
+  const allStnIds = new Set<string>();
+  stationStats.forEach(s => allStnIds.add(normalizeStationId(s.stationId)));
+  modeDegradationsToUse.forEach(d => allStnIds.add(normalizeStationId(d.stationId)));
+  brakeApplications.forEach(b => allStnIds.add(normalizeStationId(b.stationId)));
+
+  allStnIds.forEach(sId => {
+    if (sId === 'N/A') return;
+    stationSummaryMap[sId] = {
+      stationId: sId,
+      stationName: stationMap[sId] || sId,
+      locos: new Set(),
+      degradationCount: 0,
+      totalBrakes: 0,
+      ebCount: 0,
+      fsbCount: 0,
+      attribution: "Station Kavach"
+    };
+  });
+
+  stationStats.forEach(s => {
+    const sId = normalizeStationId(s.stationId);
+    if (stationSummaryMap[sId]) {
+      stationSummaryMap[sId].locos.add(String(s.locoId).trim());
+    }
+  });
+
+  modeDegradationsToUse.forEach(d => {
+    const sId = normalizeStationId(d.stationId);
+    if (stationSummaryMap[sId]) {
+      stationSummaryMap[sId].degradationCount++;
+    }
+  });
+
+  brakeApplications.forEach(b => {
+    const sId = normalizeStationId(b.stationId);
+    if (stationSummaryMap[sId]) {
+      stationSummaryMap[sId].totalBrakes++;
+      const bt = String(b.type || '').toUpperCase();
+      if (bt.includes('EB')) stationSummaryMap[sId].ebCount++;
+      if (bt.includes('FSB')) stationSummaryMap[sId].fsbCount++;
+    }
+  });
+
+  const stationSummary = Object.values(stationSummaryMap).map(s => {
+    const sIdNormalized = normalizeStationId(s.stationId);
+    const degs = modeDegradationsToUse.filter(d => normalizeStationId(d.stationId) === sIdNormalized);
+    
+    // Get weighted RFCOMM performance for this station
+    const stnStats = stationStats.filter(st => normalizeStationId(st.stationId) === sIdNormalized);
+    const totalExp = stnStats.reduce((acc, st) => acc + (st.expected || 0), 0);
+    const totalRec = stnStats.reduce((acc, st) => acc + (st.received || 0), 0);
+    const rfPerf = totalExp > 0 ? (totalRec / totalExp) * 100 : 100;
+
+    let attr = "Station Kavach";
+    if (degs.length > 0) {
+      const rfIssues = degs.filter(d => d.rootCause?.toLowerCase().includes('radio') || d.rootCause?.toLowerCase().includes('rf') || d.rootCause?.toLowerCase().includes('packet'));
+      if (rfIssues.length > 0 || rfPerf < 95) attr = "Non-RF";
+    } else if (rfPerf < 95) {
+      attr = "Non-RF";
+    }
+    
+    return {
+      stationId: s.stationId,
+      stationName: s.stationName,
+      locoCount: s.locos.size,
+      degradationCount: s.degradationCount,
+      totalBrakes: s.totalBrakes,
+      ebCount: s.ebCount,
+      fsbCount: s.fsbCount,
+      attribution: attr
+    };
+  });
+
+  // 11. Generate Loco Summary
+  const locoSummaryMap: Record<string, any> = {};
+  locoIds.forEach(lId => {
+    const sId = String(lId);
+    locoSummaryMap[sId] = {
+      locoId: lId,
+      stations: new Set(),
+      degradationCount: 0,
+      totalBrakes: 0,
+      ebCount: 0,
+      fsbCount: 0,
+      attribution: "Loco Healthy"
+    };
+  });
+
+  stationStats.forEach(s => {
+    const lId = String(s.locoId);
+    if (locoSummaryMap[lId]) {
+      locoSummaryMap[lId].stations.add(s.stationId);
+    }
+  });
+
+  modeDegradationsToUse.forEach(d => {
+    const lId = String(d.locoId);
+    if (locoSummaryMap[lId]) {
+      locoSummaryMap[lId].degradationCount++;
+    }
+  });
+
+  brakeApplications.forEach(b => {
+    const lId = String(b.locoId);
+    if (locoSummaryMap[lId]) {
+      locoSummaryMap[lId].totalBrakes++;
+      const bt = String(b.type || '').toUpperCase();
+      if (bt.includes('EB')) locoSummaryMap[lId].ebCount++;
+      if (bt.includes('FSB')) locoSummaryMap[lId].fsbCount++;
+    }
+  });
+
+  const locoSummary = Object.values(locoSummaryMap).map(l => {
+    const degs = modeDegradationsToUse.filter(d => String(d.locoId) === String(l.locoId));
+    let attr = "Loco Healthy";
+    if (degs.length > 0) {
+      const locoIssues = degs.filter(d => d.rootCause?.toLowerCase().includes('nms') || d.rootCause?.toLowerCase().includes('loco'));
+      if (locoIssues.length > 0) attr = "Loco Kavach Issue";
+      else {
+          const rfIssues = degs.filter(d => d.rootCause?.toLowerCase().includes('radio') || d.rootCause?.toLowerCase().includes('rf') || d.rootCause?.toLowerCase().includes('packet'));
+          if (rfIssues.length > 0) attr = "Non-RF";
+          else attr = "Operational / Ext";
+      }
+    }
+    return {
+      locoId: l.locoId,
+      stationCount: l.stations.size,
+      degradationCount: l.degradationCount,
+      totalBrakes: l.totalBrakes,
+      ebCount: l.ebCount,
+      fsbCount: l.fsbCount,
+      attribution: attr
+    };
+  });
+
   return {
     locoId,
     logDate,
@@ -3949,6 +4110,8 @@ export const processDashboardData = (
     smartDiagnosis,
     technicalAudit,
     infrastructureStress,
-    conflictingPackets
+    conflictingPackets,
+    stationSummary,
+    locoSummary
   };
 };

@@ -281,6 +281,25 @@ export interface DashboardStats {
     rootCause: string;
     severity: 'Critical' | 'Major' | 'Normal';
   }[];
+  stationSummary?: {
+    stationId: string | number;
+    stationName?: string;
+    locoCount: number;
+    degradationCount: number;
+    totalBrakes: number;
+    ebCount: number;
+    fsbCount: number;
+    attribution: string;
+  }[];
+  locoSummary?: {
+    locoId: string | number;
+    stationCount: number;
+    degradationCount: number;
+    totalBrakes: number;
+    ebCount: number;
+    fsbCount: number;
+    attribution: string;
+  }[];
   conflictingPackets?: {
     time: string;
     locoId: string | number;
