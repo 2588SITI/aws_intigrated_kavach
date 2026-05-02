@@ -1251,20 +1251,17 @@ export const processDashboardData = (
   const seenTrnTagIssues = new Set<string>();
   let trnStnInfo: { id: string, name: string }[] = [];
   
-  if (trnData) {
-    const firstTrn = trnData[0] || {};
-    const trnKeys = Object.keys(firstTrn);
-    const colR = trnKeys[17]; // Column R is index 17
-    const trnTagLinkCol = findColumn(firstTrn, 'Tag Link Info', 'TagLinkInfo', 'TagInfo') || colR;
-    const trnStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
-    const trnStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name', 'STATION') || trnKeys[2];
+  const trnTagLinkCol = findColumn(firstTrn, 'Tag Link Info', 'TagLinkInfo', 'TagInfo') || trnKeys[17] || 'Tag Link Info';
+  const diagStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
+  const diagStnNameCol = findColumn(firstTrn, 'Station Name', 'StationName', 'Station_Name', 'STATION') || trnKeys[2];
 
+  if (trnData) {
     // Forward-fill stationId and stationName for TRN data
     let lastSeenStnId = 'N/A';
     let lastSeenStnName = 'N/A';
     trnStnInfo = trnData.map(row => {
-      const sId = String(row[trnStnIdCol] || '').trim();
-      const sName = String(row[trnStnNameCol] || '').trim();
+      const sId = String(row[diagStnIdCol] || '').trim();
+      const sName = String(row[diagStnNameCol] || '').trim();
 
       if (sId && sId !== 'N/A' && sId !== '-' && sId !== '0' && sId !== '0.0') {
         lastSeenStnId = sId;
@@ -1912,7 +1909,6 @@ export const processDashboardData = (
 
   // Brake Applications
   const rawBrakeApplications: any[] = [];
-  const trnStnIdCol = findColumn(firstTrn, 'Station Id', 'StationId', 'Station_Id') || 'Station Id';
 
   trnData?.forEach((row, idx) => {
     const lIdVal = getBestLocoIdFromRow(row, trnKeys, locoId);
@@ -1940,6 +1936,44 @@ export const processDashboardData = (
       const timestamp = parseTime(timeStr);
       
       if (!isNaN(timestamp)) {
+        // Find reason for this brake application
+        let rawBReason = "";
+        const emr = String(row[emrStatusCol] || '').trim();
+        const ev = String(row[eventCol] || '').toLowerCase();
+        const hasEmrNow = emr !== '' && emr !== '0' && emr.toLowerCase() !== 'regular' && emr.toLowerCase() !== 'none';
+        
+        if (hasEmrNow) {
+          rawBReason = emr;
+        } else {
+          // Look back up to 5 records for a reason
+          for (let i = 1; i <= 5; i++) {
+            if (idx - i < 0) break;
+            const prevRow = trnData[idx - i];
+            const pEmr = String(prevRow[emrStatusCol] || '').trim();
+            const pEv = String(prevRow[eventCol] || '').toLowerCase();
+            const hasPEmr = pEmr !== '' && pEmr !== '0' && pEmr.toLowerCase() !== 'regular' && pEmr.toLowerCase() !== 'none';
+            const hasPEv = pEv !== '' && (pEv.includes('overspeed') || pEv.includes('spad') || pEv.includes('protection') || pEv.includes('collision') || pEv.includes('rollback') || pEv.includes('authority') || pEv.includes('limit') || pEv.includes('timeout'));
+            
+            if (hasPEmr || hasPEv) {
+              rawBReason = hasPEmr ? pEmr : String(prevRow[eventCol]);
+              break;
+            }
+          }
+        }
+        
+        // Clean up common noise and apply safety keywords mapping
+        if (rawBReason) {
+            const brLow = rawBReason.toLowerCase();
+            if (brLow.includes('overspeed')) rawBReason = "Overspeed Violation";
+            else if (brLow.includes('spad')) rawBReason = "SPAD (Signal Danger)";
+            else if (brLow.includes('collision')) rawBReason = "Potential Collision";
+            else if (brLow.includes('rollback')) rawBReason = "Rollback Protection";
+            else if (brLow.includes('timeout') || brLow.includes('radio')) rawBReason = "Radio / MA Timeout";
+            else if (brLow.includes('limit')) rawBReason = "Exceeding Authority Limit";
+            
+            if (rawBReason.toLowerCase() === 'none' || rawBReason === '0' || rawBReason.toLowerCase() === 'regular') rawBReason = "";
+        }
+
         rawBrakeApplications.push({
           time: timeStr,
           timestamp,
@@ -1949,7 +1983,8 @@ export const processDashboardData = (
           stationId: stn.id,
           stationName: stn.name,
           locoId: lIdVal,
-          radio: String(row[trnRadioCol] || '').trim()
+          radio: String(row[trnRadioCol] || '').trim(),
+          reason: rawBReason || "System Safety Trigger"
         });
       }
     }
@@ -3595,30 +3630,83 @@ export const processDashboardData = (
     const brakesInWindow = trnRowsInWindow.filter(row => {
       const b = String(row[brakeCol] || '').toUpperCase().trim();
       const e = String(row[eventCol] || '').toLowerCase();
-      return b.includes('EB') || b.includes('SB') || b.includes('FSB') || b.includes('NSF') || 
-             e.includes('eb applied') || e.includes('sb applied') || e.includes('fsb applied') || e.includes('emergency brake');
+      return b.includes('EB') || b.includes('SB') || b.includes('FSB') || b.includes('NSF') || b.includes('NSB') || 
+             e.includes('eb applied') || e.includes('sb applied') || e.includes('fsb applied') || e.includes('emergency brake') || e.includes('nsb applied');
     });
     const primaryBrake = brakesInWindow.find(r => parseTime(getTrnTime(r)) >= degTime - 5000);
     const brakeTime = primaryBrake ? getTrnTime(primaryBrake) : null;
     const brakeType = primaryBrake ? (String(primaryBrake[brakeCol] || primaryBrake[eventCol]).split(' ')[0]) : null;
+    
+    // Find Brake Reason
+    let brakeReason = "";
+    if (primaryBrake) {
+      const bTs = parseTime(getTrnTime(primaryBrake));
+      // Look for a reason in Emr Status or Event at or just before the brake
+      // Search backwards to find the reason closest to the brake application
+      const reasonRow = [...trnRowsInWindow].reverse().find(r => {
+        const rTs = parseTime(getTrnTime(r));
+        const emr = String(r[emrStatusCol] || '').trim();
+        const ev = String(r[eventCol] || '').toLowerCase();
+        
+        const hasEmr = emr !== '' && emr !== '0' && emr.toLowerCase() !== 'regular' && emr.toLowerCase() !== 'none';
+        // Ensure the event row has a descriptive reason, not just "EB Applied"
+        const isBrakeStatusOnly = (ev.includes('eb applied') || ev.includes('sb applied') || ev.includes('fsb applied')) && ev.length < 15;
+        const hasEv = ev !== '' && !isBrakeStatusOnly && (ev.includes('overspeed') || ev.includes('spad') || ev.includes('protection') || ev.includes('collision') || ev.includes('rollback') || ev.includes('movement authority') || ev.includes('limit') || ev.includes('packet') || ev.includes('timeout') || ev.includes('radio') || ev.includes('gap') || ev.includes('signal aspect') || ev.includes('auth'));
+        
+        return rTs <= bTs && rTs >= bTs - 5000 && (hasEmr || hasEv);
+      });
+
+      if (reasonRow) {
+        const emrVal = String(reasonRow[emrStatusCol] || '').trim();
+        const evVal = String(reasonRow[eventCol] || '').trim();
+        const emrHealthy = emrVal === '' || emrVal === '0' || emrVal.toLowerCase() === 'regular' || emrVal.toLowerCase() === 'none';
+        
+        brakeReason = !emrHealthy ? emrVal : evVal;
+      }
+      
+      if (!brakeReason && emrStatusStr) {
+        brakeReason = emrStatusStr;
+      }
+      
+      // Safety keywords mapping for user readability
+      const brLow = brakeReason.toLowerCase();
+      if (brLow.includes('overspeed')) brakeReason = "Overspeed Violation";
+      else if (brLow.includes('spad')) brakeReason = "SPAD (Signal Passed at Danger)";
+      else if (brLow.includes('collision')) brakeReason = "Potential Collision Detection";
+      else if (brLow.includes('rollback')) brakeReason = "Rollback Protection";
+      else if (brLow.includes('timeout') || brLow.includes('radio')) brakeReason = "Radio / MA Timeout";
+      else if (brLow.includes('limit')) brakeReason = "Exceeding Authority Limit";
+      else if (brLow.includes('signal aspect')) brakeReason = "Signal Aspect Mismatch";
+      else if (brLow.includes('packet') || brLow.includes('gap')) brakeReason = "Telemetry Packet Gap";
+    }
 
     // 5. Tag link issues / Spacing defects
-    const tagIssuesInWindow = tagLinkIssuesUnfiltered.filter(tag => {
-      const tTime = parseTime(tag.time);
-      return String(tag.locoId).trim() === locoIdVal && tTime >= windowStart && tTime <= windowEnd;
-    });
-    const hasTagSpacingDefect = tagIssuesInWindow.some(t => t.info.toLowerCase().includes('intertag') || t.error.toLowerCase().includes('spacing'));
-
-    // 6. NMS Health Deep Analysis (The Trigger Correlation)
-    const nmsIssuesInWindow = trnRowsInWindow.filter(row => {
-      const h = String(row[nmsHealthCol] || '').trim();
-      // Code 32 is suspect if it's appearing in an error context
-      return h !== '0' && h !== 'ok' && h !== '';
+    const rowsWithInterTagDist = trnRowsInWindow.filter(row => {
+      const tagInfo = String(row[trnTagLinkCol] || '').toLowerCase();
+      // Look for the specific error string
+      return tagInfo.includes('intertag') || tagInfo.includes('greaterthandup');
     });
     
-    // Check for NMS Flapping (0/32 interleaving)
-    const rawHealths = trnRowsInWindow.map(r => String(r[nmsHealthCol] || ''));
-    const isNmsFlapping = rawHealths.some((h, i) => i > 0 && ((h === '32' && rawHealths[i-1] === '0') || (h === '0' && rawHealths[i-1] === '32')));
+    const interTagDistRatio = trnRowsInWindow.length > 0 ? rowsWithInterTagDist.length / trnRowsInWindow.length : 0;
+    const hasTagSpacingDefect = interTagDistRatio > 0.6; // If >60% rows have it, it's a defect
+
+    // 6. NMS Health Deep Analysis (The Trigger Correlation)
+    const nmsIssuesPreEvent = trnRowsInWindow.filter(row => {
+      const ts = parseTime(getTrnTime(row));
+      const h = String(row[nmsHealthCol] || '').trim();
+      return ts <= degTime && h !== '0' && h !== 'ok' && h !== '' && h !== '32';
+    });
+
+    const nmsIssuesPostEvent = trnRowsInWindow.filter(row => {
+      const ts = parseTime(getTrnTime(row));
+      const h = String(row[nmsHealthCol] || '').trim();
+      return ts > degTime && h !== '0' && h !== 'ok' && h !== '';
+    });
+    
+    // Check for NMS Flapping (0/32 interleaving) ONLY PRE-EVENT
+    const preEventRows = trnRowsInWindow.filter(r => parseTime(getTrnTime(r)) <= degTime);
+    const rawHealthsPre = preEventRows.map(r => String(r[nmsHealthCol] || ''));
+    const isNmsFlappingPre = rawHealthsPre.some((h, i) => i > 0 && ((h === '32' && rawHealthsPre[i-1] === '0') || (h === '0' && rawHealthsPre[i-1] === '32')));
 
     // Check for Packet Conflicts in same second
     const secGroups: Record<string, any[]> = {};
@@ -3631,10 +3719,12 @@ export const processDashboardData = (
     let hasConflictingPackets = false;
     let conflictDesc = "";
     for (const [t, rows] of Object.entries(secGroups)) {
-      if (rows.length > 2) { // 3 or more packets in same sec is highly suspect
+      const ts = parseTime(t);
+      // Conflict must be within 1 sec of degradation to be the cause
+      if (Math.abs(ts - degTime) <= 1000 && rows.length > 2) { 
         const modes = new Set(rows.map(r => String(r[modeCol] || '').toUpperCase()));
         const healths = new Set(rows.map(r => String(r[nmsHealthCol] || '')));
-        if (modes.size > 1 || healths.size > 1) {
+        if (modes.size > 1) {
           hasConflictingPackets = true;
           conflictDesc = `${Array.from(modes).join('/')} with NMS=${Array.from(healths).join('/')}`;
           break;
@@ -3653,18 +3743,24 @@ export const processDashboardData = (
     let nmsNarrative = "NMS Health = 0 (Healthy) during this transition phase.";
     let nmsErrorCode = "";
 
-    if (nmsIssuesInWindow.length > 0) {
+    if (nmsIssuesPreEvent.length > 0) {
       // Prioritize "Strong" error codes like 40 or 16 if they exist in window
-      const strongNms = nmsIssuesInWindow.find(r => ['40', '16', '48'].includes(String(r[nmsHealthCol])));
-      const targetNmsRow = strongNms || nmsIssuesInWindow[0];
+      const strongNms = nmsIssuesPreEvent.find(r => ['40', '16', '48'].includes(String(r[nmsHealthCol])));
+      const targetNmsRow = strongNms || nmsIssuesPreEvent[0];
       const nmsTimeVal = getTrnTime(targetNmsRow);
       nmsErrorCode = String(targetNmsRow[nmsHealthCol]);
       let desc = "Hardware Fault";
-      if (['16', '32', '40', '48'].includes(nmsErrorCode)) desc = "Vital Hardware Error (BIU mismatch / redundant processor sync loss)";
+      if (['16', '40', '48'].includes(nmsErrorCode)) desc = "Vital Hardware Error (BIU mismatch / redundant processor sync loss)";
+      else if (nmsErrorCode === '32') desc = "Processor Sync Warning (Transient)";
       else if (nmsErrorCode === '8') desc = "Sub-system internal fault (Minor Sync Pressure)";
       
       const timeDiffSec = Math.round((degTime - parseTime(nmsTimeVal)) / 1000);
-      nmsNarrative = `NMS Health = ${nmsErrorCode} at ${nmsTimeVal.split(' ')[1] || nmsTimeVal} — Code ${nmsErrorCode} = ${desc}. Appears ${Math.abs(timeDiffSec)} seconds ${timeDiffSec >= 0 ? 'BEFORE' : 'AFTER'} the initial degradation.`;
+      nmsNarrative = `NMS Health = ${nmsErrorCode} at ${nmsTimeVal.split(' ')[1] || nmsTimeVal} — Code ${nmsErrorCode} = ${desc}. Identified ${Math.abs(timeDiffSec)} seconds ${timeDiffSec >= 0 ? 'BEFORE' : 'AFTER'} the initial degradation.`;
+    } else if (nmsIssuesPostEvent.length > 0) {
+      const postNms = nmsIssuesPostEvent.find(r => ['40', '16'].includes(String(r[nmsHealthCol])));
+      if (postNms) {
+        nmsNarrative = `NMS Health = ${postNms[nmsHealthCol]} detected POST-EVENT. This confirms the hardware/sync failure led to a protective step-down.`;
+      }
     }
 
     // 7. Analysis Bullets Generation
@@ -3679,7 +3775,7 @@ export const processDashboardData = (
       bullets.push(`TRANSIENT PACKET CONFLICT — Detected ${conflictDesc} at the exact moment of degradation. Radio sync issue detected.`);
     } else if (nmsErrorCode) {
       bullets.push(nmsNarrative + " This internal hardware fault triggered the protective step-down to maintain safe operating parameters.");
-    } else if (isNmsFlapping) {
+    } else if (isNmsFlappingPre) {
       bullets.push(`NMS Flapping (0/32 codes) detected on active radio — Suggests internal redundancy/sync pressure.`);
     } else {
       bullets.push("No explicit internal hardware error or emergency status found; trigger likely based on external signaling distance or Radio/MA timeout.");
@@ -3690,11 +3786,12 @@ export const processDashboardData = (
     }
 
     if (brakeTime) {
-      bullets.push(`Brake = ${brakeType} at ${brakeTime.split(' ')[1]} — The system commanded ${brakeType} at or near the moment of transition. This confirms Kavach was active in its protective safety intervention.`);
+      const reasonSuffix = brakeReason ? ` due to ${brakeReason}` : "";
+      bullets.push(`Brake = ${brakeType} at ${brakeTime.split(' ')[1]}${reasonSuffix} — The system commanded ${brakeType} at or near the moment of transition. This confirms Kavach was active in its protective safety intervention${brakeReason ? ` triggered by ${brakeReason}` : ""}.`);
     }
 
     if (hasTagSpacingDefect) {
-      bullets.push("InterTagDistGreaterThanDupTag detected throughout window — Tag spacing mismatch at this section creates background anchoring pressure, though the primary trigger remains the safety/hardware event listed above.");
+      bullets.push(`Persistent InterTagDistGreaterThanDupTag detected (${(interTagDistRatio * 100).toFixed(0)}% of rows) — Tag spacing mismatch at this section creates significant background anchoring pressure.`);
     }
 
     // 8. Acknowledgement & Timeline
@@ -3727,31 +3824,44 @@ export const processDashboardData = (
     const isStationary = maxSpeed === 0;
     const finalMode = sequence[sequence.length - 1].to;
 
-    if (emrStatusStr) {
-      rootCauseConclusion = `Root cause: KAVACH SAFETY TRIGGER — ${emrStatusStr} alert at ${stnName}. Kavach correctly identified a site-specific risk (e.g., Obstacle or Collision Threat) and reduced speed authority. Mode transition from FS to ${finalMode} was intentional and proactive safety behaviour. Check section log around ${deg.time} for the conflicting locomotive.`;
+    if (emrStatusStr || (brakeType && brakeReason)) {
+      const displayReason = brakeReason || emrStatusStr;
+      const brakeContext = brakeType ? ` and commanded ${brakeType} application` : "";
+      rootCauseConclusion = `KAVACH SAFETY INTERVENTION — ${displayReason} detected at ${stnName}${brakeContext}. The system proactively intervened to maintain safe operating parameters. This is intended safety behavior.`;
       severity = 'Normal';
-    } else if (hasConflictingPackets || (nmsErrorCode === '40') || (nmsErrorCode === '16')) {
-      rootCauseConclusion = `Root cause: RADIO INTERNAL SYNC ERROR — Detected highly suspicious NMS 40/16 (Vital Hardware Error) and/or conflicting packets in the same second (${conflictDesc || 'BIU Mismatch'}). This indicates a momentary hardware sync loss on the active Radio board at ${stnName}. System reverted to ${finalMode} due to internal processor mismatch. Issue self-corrected after transient event.`;
+    } else if (isStationary && finalMode === 'ST') {
+      rootCauseConclusion = `STATIONARY MA EXPIRY at ${stnName}. Train was standing at speed 0. The station TCAS failed to provide a valid Movement Authority (MA) renewal before expiry. This is a station-side logic defect.`;
+      severity = 'Major';
+    } else if (hasConflictingPackets || (['40', '16'].includes(nmsErrorCode))) {
+      rootCauseConclusion = `RADIO INTERNAL SYNC FAILURE — Detected conflicting telemetry packets (${conflictDesc}) and/or NMS 40/16 (Vital Hardware Error). This indicates the Radio board's redundant processors lost synchronization. Loco ${locoIdVal} Radio board requires internal audit.`;
       severity = 'Critical';
+    } else if (hasTagSpacingDefect && !nmsErrorCode && !hasConflictingPackets) {
+       rootCauseConclusion = `INFRASTRUCTURE DEFECT — Persistent InterTagDistGreaterThanDupTag detected for ${(interTagDistRatio * 100).toFixed(0)}% of rows. The track-side RFID tag spacing at ${stnName} is out of tolerance, leading to a confidence loss.`;
+       severity = 'Major';
     } else if (nmsErrorCode) {
-      rootCauseConclusion = `Root cause: LOCO HARDWARE STRESS — NMS Health code ${nmsErrorCode} (Hardware Fault) appeared in loco-side telemetry at ${deg.time}. This hardware event caused an internal processor sync loss, forcing the system into ${finalMode} to maintain vital safety parameters. Inspect Loco ${locoIdVal} VIU/BIU module.`;
+      rootCauseConclusion = `LOCO HARDWARE FAULT — NMS Health code ${nmsErrorCode} (Hardware Error) appeared at ${deg.time}. This hardware event caused an internal processor sync loss, forcing a protective step-down.`;
       severity = 'Critical';
     } else if (dropoutRow) {
-       rootCauseConclusion = `Root cause: MOMENTARY TELEMETRY DROPOUT — Signal Aspect and Auth Type dropped significantly ("-") at the degradation point. This brief station link instability forced the mode drop to ${finalMode}. Corrected after RF link stabilized.`;
+       rootCauseConclusion = `TELEMETRY DROPOUT — Signal Aspect and Auth Type dropped ("-") at the degradation point. Transient station link instability forced a mode drop.`;
        severity = 'Major';
     } else if (isRadioSwitch) {
-      rootCauseConclusion = `Root cause: MOMENTARY PACKET GAP — Active Radio switched (${switchDetails}) during the transition window at ${stnName}. During this handover exactly at ${deg.time}, a momentary station link dropout occurred. Without consistent packets, the system stepped down to ${finalMode} mode. This is an RF reliability issue during antenna handover.`;
-      severity = 'Major';
-    } else if (isStationary && finalMode === 'ST') {
-      rootCauseConclusion = `Root cause: STATIONARY MA EXPIRY at ${stnName}. Train was standing at speed 0. The station TCAS failed to provide a valid Movement Authority (MA) renewal before the existing one expired. Fallback to StandBy (ST) follows standard safety protocol for un-refreshed authority while stationary. Platform tag geometry may be contributing to poor position anchoring.`;
-      severity = 'Major';
-    } else if (hasTagSpacingDefect) {
-      rootCauseConclusion = `Root cause: INFRASTRUCTURE DEFECT — Persistent InterTagDistGreaterThanDupTag detected for ${trnRowsInWindow.length} packets. The track-side RFID tag spacing at ${stnName} is out of tolerance. This created continuous positioning stress, leading to a confidence loss and subsequent mode drop to ${finalMode}. Infrastructure measurement required.`;
+      rootCauseConclusion = `MOMENTARY PACKET GAP during Radio Switch (${switchDetails}) at ${stnName}. Brief station link dropout occurred during antenna handover.`;
       severity = 'Major';
     } else {
-      rootCauseConclusion = `Root cause: TELEMETRY SIGNAL DROPOUT — Likely transient RF packet loss or station link instability through ${stnName}. In the absence of hardware/safety triggers, the drop to ${finalMode} indicates the loco failed to receive critical signalling packets for multiple refresh cycles. Audit station-side radio health.`;
+      rootCauseConclusion = `TELEMETRY SIGNAL DROPOUT — Likely transient RF packet loss or station link instability through ${stnName}. Audit station-side radio health.`;
       severity = 'Major';
     }
+
+    // Update the original degradation object for the UI
+    deg.rootCause = rootCauseConclusion;
+    deg.severity = severity.toLowerCase() as 'critical' | 'warning' | 'info';
+    deg.hasSyncConflict = hasConflictingPackets;
+    deg.syncConflictDesc = hasConflictingPackets ? conflictDesc : undefined;
+    deg.emrStatus = brakeReason || emrStatusStr || deg.emrStatus || 'None';
+    if (brakeType) {
+      deg.reason = `${deg.reason} (${brakeType} Applied${brakeReason ? `: ${brakeReason}` : ""})`;
+    }
+    deg.actionRequired = hasConflictingPackets || nmsErrorCode ? "Inspect Loco Radio Module / BIU Connections" : (dropoutRow || isRadioSwitch ? "Check Station RF Coverage / Handover Geometry" : "Infrastructure Review");
 
     automatedAudits.push({
       id: `aud-deg-perfect-${idx}`,

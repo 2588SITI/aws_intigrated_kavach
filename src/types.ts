@@ -106,10 +106,22 @@ export interface DashboardStats {
     rootCauseCategory?: 'station-tag' | 'safety-trigger' | 'loco-nms' | 'radio-switch' | 'ma-expiry' | 'unknown';
     actionRequired?: string;
     severity?: 'critical' | 'warning' | 'info';
+    hasSyncConflict?: boolean;
+    syncConflictDesc?: string;
   }[];
   radioPacketLossEvents: { time: string; stationName: string; reason: string; details: string; locoId: string | number; duration?: number; radio?: string }[];
   shortPackets: { time: string; type: string; length: number; locoId: string | number; radio?: string }[];
-  brakeApplications: { time: string; type: string; speed: number; location: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
+  brakeApplications: { 
+    time: string; 
+    type: string; 
+    speed: number; 
+    location: string; 
+    stationId: string; 
+    stationName?: string; 
+    locoId: string | number; 
+    radio?: string;
+    reason?: string;
+  }[];
   signalOverrides: { time: string; signalId: string; status: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
   sosEvents: { time: string; source: string; type: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];
   trainConfigChanges: { time: string; parameter: string; oldVal: string; newVal: string; stationId: string; stationName?: string; locoId: string | number; radio?: string }[];

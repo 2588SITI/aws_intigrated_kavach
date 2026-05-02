@@ -33,6 +33,7 @@ import {
   Zap as ZapIcon
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { RootCauseAccuracyAudit } from './components/AccuracyAudit';
 import { 
   BarChart, 
   Bar, 
@@ -673,58 +674,20 @@ export default function App() {
         filteredStats.modeDegradations.forEach((deg, idx) => {
           if (currentY > 240) { doc.addPage(); currentY = 20; }
           
-          // Event Header Strip
-          doc.setFillColor(deg.severity === 'critical' ? 254 : 255, deg.severity === 'critical' ? 242 : 251, deg.severity === 'critical' ? 242 : 191); // Faint Red or Amber
-          doc.rect(20, currentY, 170, 10, 'F');
           doc.setFont('helvetica', 'bold');
-          doc.setFontSize(10);
+          doc.setFontSize(9);
           doc.setTextColor(50);
           
           const idStr = formatStationName(deg.stationId);
           const nameStr = deg.stationName && deg.stationName !== 'N/A' ? formatStationName(deg.stationName) : '';
           const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} (${nameStr})` : (nameStr || idStr);
 
-          doc.text(`${deg.time} | ${deg.from} -> ${deg.to} | STN: ${stnDisplay} | Loco: ${deg.locoId}`, 25, currentY + 6.5);
-          currentY += 14;
-
-          // Evidence Context
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9);
-          doc.setTextColor(100);
-          const contextStr = `Speed: ${deg.speed} Kmph | Radio: ${deg.radio || 'N/A'} | NMS: ${deg.nmsAtEvent || '0'} | Emr: ${deg.emrStatus || 'Regular'}`;
-          doc.text(contextStr, 25, currentY);
-          currentY += 6;
-
-          // Root Cause block
-          doc.setFont('helvetica', 'bold');
-          if (deg.severity === 'critical') {
-            doc.setTextColor(220, 38, 38);
-          } else {
-            doc.setTextColor(217, 119, 6);
-          }
-          doc.text('ROOT CAUSE:', 25, currentY);
-
-          doc.setFont('helvetica', 'italic');
-          doc.setTextColor(30);
-          const rcLines = doc.splitTextToSize(deg.rootCause || 'Contextual analysis inconclusive.', 150);
-          doc.text(rcLines, 55, currentY);
-          currentY += (rcLines.length * 4.5) + 4;
-
-          // Action Required
-          if (deg.actionRequired) {
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(0, 102, 204);
-            doc.text('ACTION:', 25, currentY);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(50);
-            const actionLines = doc.splitTextToSize(deg.actionRequired, 150);
-            doc.text(actionLines, 55, currentY);
-            currentY += (actionLines.length * 4.5) + 6;
-          }
-          
-          doc.setDrawColor(230);
-          doc.line(20, currentY, 190, currentY);
+          doc.text(`${deg.time} | ${deg.from} -> ${deg.to} | STN: ${stnDisplay} | Loco: ${deg.locoId} | Speed: ${deg.speed} Kmph`, 20, currentY + 4);
           currentY += 8;
+          
+          doc.setDrawColor(240);
+          doc.line(20, currentY, 190, currentY);
+          currentY += 6;
         });
       }
 
@@ -745,16 +708,20 @@ export default function App() {
             b.locoId,
             b.type, 
             `${b.speed} Kmph`, 
-            stnDisplay
+            stnDisplay,
+            b.reason || '-'
           ];
         });
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Time', 'Loco No', 'Type', 'Speed', 'Station']],
+          head: [['Time', 'Loco No', 'Type', 'Speed', 'Station', 'Reason / Trigger']],
           body: brakeRows,
           theme: 'striped',
           headStyles: { fillColor: [245, 158, 11] }, // Amber-500
-          styles: { fontSize: 8 }
+          styles: { fontSize: 8 },
+          columnStyles: {
+            5: { cellWidth: 50 }
+          }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
@@ -1133,16 +1100,7 @@ export default function App() {
       doc.text(amlLines, 20, currentY);
       currentY += (amlLines.length * 5) + 5;
 
-      // Action Required Box
-      doc.setFillColor(0, 102, 204);
-      doc.rect(20, currentY, 170, 25, 'F');
-      doc.setTextColor(255);
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text('FINAL ACTION REQUIRED:', 25, currentY + 8);
-      doc.setFontSize(11);
-      const actionLines = doc.splitTextToSize(filteredStats.stationDeepAnalysis.dashboard.actionRequired, 160);
-      doc.text(actionLines, 25, currentY + 15);
+
 
       // Section 11: Moving Radio Loss Analysis (Speed > 0)
       if (filteredStats.movingRadioLoss && filteredStats.movingRadioLoss.length > 0) {
@@ -1333,24 +1291,24 @@ export default function App() {
         bodyY = writeText(`3. MODE DEGRADATION AUDIT (TRNMSNMA):`, bodyY, 11, true);
         autoTable(doc, {
           startY: bodyY + 2,
-          head: [['Timestamp', 'Station', 'Dir', 'From', 'To', 'Reason', 'LP Response']],
+          head: [['Timestamp', 'Station', 'From -> To', 'Reason / Root Cause']],
           body: filteredStats.modeDegradations.map(d => {
-            const fStnId = formatStationName(d.stationId);
-            const fStnName = formatStationName(d.stationName);
-            const stnId = (fStnId !== 'N/A') ? fStnId : '';
-            const stnName = (fStnName !== 'N/A') ? `\n(${fStnName})` : '';
+            const fStnName = formatStationName(d.stationName || d.stationId);
+            const syncNote = d.hasSyncConflict ? "[RADIO SYNC FAILURE] " : "";
+            const rootCause = d.rootCause ? `\nAudit: ${d.rootCause.slice(0, 150)}${d.rootCause.length > 150 ? '...' : ''}` : "";
+            
             return [
               d.time, 
-              `${stnId}${stnName}`.trim(), 
-              d.direction || 'N/A',
-              d.from, 
-              d.to, 
-              d.reason, 
-              d.lpResponse
+              fStnName, 
+              `${d.from} -> ${d.to}`, 
+              `${syncNote}${d.reason}${rootCause}`
             ];
           }),
           theme: 'grid',
-          styles: { fontSize: 7 },
+          styles: { fontSize: 6.5, cellPadding: 2 },
+          columnStyles: {
+            3: { cellWidth: 80 }
+          },
           margin: { left: 20 }
         });
         bodyY = (doc as any).lastAutoTable.finalY + 8;
@@ -1592,14 +1550,8 @@ export default function App() {
         bodyY = (doc as any).lastAutoTable.finalY + 10;
       }
 
-      bodyY = writeText('Root Cause Probability Analysis:', bodyY, 11, true);
-      const rc = filteredStats.stationDeepAnalysis.rootCause;
-      bodyY = writeText(`- Station-side: ${rc.stationSide}%`, bodyY + 2, 9);
-      bodyY = writeText(`- Loco-side: ${rc.locoSide}%`, bodyY, 9);
-      bodyY = writeText(`- Hardware Prob: ${rc.hardwareProb}%`, bodyY, 9);
-      bodyY = writeText(`- Software Prob: ${rc.softwareProb}%`, bodyY, 9);
-
       bodyY += 5;
+
       doc.setFontSize(9);
       doc.setTextColor(0, 120, 0);
       doc.setFont('helvetica', 'italic');
@@ -1609,11 +1561,37 @@ export default function App() {
 
       bodyY += 10;
       doc.setFillColor(0, 102, 204);
-      doc.rect(20, bodyY, 170, 20, 'F');
-      doc.setTextColor(255);
-      doc.text('FINAL ACTION REQUIRED:', 25, bodyY + 8);
-      const actionLines = doc.splitTextToSize(filteredStats.stationDeepAnalysis.dashboard.actionRequired, 160);
-      doc.text(actionLines, 25, bodyY + 15);
+      doc.rect(20, bodyY, 170, 5, 'F');
+      bodyY += 10;
+
+      // Technical Audit Logs (New Section for Sync Failures)
+      if (filteredStats.technicalAudit && filteredStats.technicalAudit.length > 0) {
+        doc.addPage();
+        bodyY = 20;
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(0, 102, 204);
+        bodyY = writeText('DETAILED TECHNICAL EVENT AUDIT (TRNMSNMA)', bodyY, 12, true);
+        doc.line(20, bodyY + 2, 190, bodyY + 2);
+        bodyY += 10;
+        doc.setTextColor(0);
+
+        filteredStats.technicalAudit.forEach((audit, aidx) => {
+           if (bodyY > 240) { doc.addPage(); bodyY = 20; }
+           bodyY = writeText(`EVENT #${aidx+1}: ${audit.title}`, bodyY, 10, true);
+           bodyY = writeText(`Time Range: ${audit.timeRange} | Severity: ${audit.severity}`, bodyY + 2, 9);
+           
+           
+           bodyY = writeText(`Technical Findings:`, bodyY, 9, true);
+           audit.analysisBullets.forEach(bullet => {
+              if (bodyY > 260) { doc.addPage(); bodyY = 20; }
+              const bulletLines = doc.splitTextToSize(`- ${bullet}`, 165);
+              doc.text(bulletLines, 25, bodyY + 4);
+              bodyY += (bulletLines.length * 3.5) + 2;
+           });
+           bodyY += 8;
+        });
+      }
 
       // Technical Note
       bodyY = writeText(`7. TECHNICAL NOTE:`, bodyY + 8, 10, true);
@@ -2222,90 +2200,12 @@ function StationAnalysis({ stats }: { stats: DashboardStats }) {
                   </p>
                 </div>
 
-                <div className={cn(
-                  "p-6 rounded-2xl shadow-xl",
-                  stats.stationDeepAnalysis.dashboard.conclusion.includes('Suspect') || stats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple')
-                    ? "bg-rose-500 shadow-rose-500/20" 
-                    : stats.stationDeepAnalysis.dashboard.conclusion.includes('Station')
-                      ? "bg-amber-500 shadow-amber-500/20"
-                      : "bg-emerald-500 shadow-emerald-500/20"
-                )}>
-                  <h3 className="text-lg font-black text-white flex items-center gap-2 uppercase tracking-tighter">
-                    {stats.stationDeepAnalysis.dashboard.conclusion.includes('Fit') || stats.stationDeepAnalysis.dashboard.conclusion.includes('Healthy') ? (
-                      <CheckCircle2 className="w-6 h-6 text-white" />
-                    ) : (
-                      <AlertTriangle className="w-6 h-6 text-white animate-bounce" />
-                    )}
-                    Action Required
-                  </h3>
-                  <p className="text-white/90 text-sm font-bold mt-2 leading-relaxed whitespace-pre-line">
-                    {stats.stationDeepAnalysis.dashboard.actionRequired}
-                  </p>
-                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Root Cause Analysis Card */}
-      <div className="glass-card p-8 rounded-2xl border-l-4 border-emerald-500 bg-emerald-500/5">
-        <div className="flex items-start gap-6">
-          <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center shrink-0 border border-emerald-500/20">
-            <Activity className="w-8 h-8 text-emerald-400" />
-          </div>
-          <div className="space-y-3">
-            <h3 className="text-xl font-bold text-white">Root Cause Analysis Conclusion</h3>
-            <p className="text-slate-300 leading-relaxed text-lg font-medium">
-              {stats.stationDeepAnalysis.rootCause.conclusion}
-            </p>
-            <div className="flex flex-wrap gap-8 mt-4">
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Station-Side Probability</p>
-                <div className="flex items-center gap-3">
-                  <div className="w-32 h-2 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500" style={{ width: `${stats.stationDeepAnalysis.rootCause.stationSide}%` }} />
-                  </div>
-                  <span className="text-sm font-bold text-emerald-400">{stats.stationDeepAnalysis.rootCause.stationSide}%</span>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Train-Side Probability</p>
-                <div className="flex items-center gap-3">
-                  <div className="w-32 h-2 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-rose-500" style={{ width: `${stats.stationDeepAnalysis.rootCause.locoSide}%` }} />
-                  </div>
-                  <span className="text-sm font-bold text-rose-400">{stats.stationDeepAnalysis.rootCause.locoSide}%</span>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Hardware Issue Prob.</p>
-                <div className="flex items-center gap-3">
-                  <div className="w-32 h-2 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-amber-500" style={{ width: `${stats.stationDeepAnalysis.rootCause.hardwareProb}%` }} />
-                  </div>
-                  <span className="text-sm font-bold text-amber-400">{stats.stationDeepAnalysis.rootCause.hardwareProb}%</span>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Software/Config Prob.</p>
-                <div className="flex items-center gap-3">
-                  <div className="w-32 h-2 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500" style={{ width: `${stats.stationDeepAnalysis.rootCause.softwareProb}%` }} />
-                  </div>
-                  <span className="text-sm font-bold text-blue-400">{stats.stationDeepAnalysis.rootCause.softwareProb}%</span>
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 pt-4 border-t border-white/5">
-              <p className="text-slate-400 text-sm italic">
-                <span className="font-bold text-slate-300 not-italic uppercase text-[10px] mr-2">Technical Breakdown:</span>
-                {stats.stationDeepAnalysis.rootCause.breakdown}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <div className="glass-card p-8 rounded-2xl">
         <div className="flex justify-between items-center mb-6">
@@ -2554,13 +2454,6 @@ function TechnicalAuditView({ stats }: { stats: DashboardStats }) {
 
                        <div className="flex flex-col gap-6">
                          <div className="bg-blue-500/5 p-6 rounded-2xl border border-blue-500/20 font-mono">
-                            <div className="flex items-center gap-2 mb-3">
-                               <Zap className="w-4 h-4 text-blue-400" />
-                               <h4 className="text-xs font-black uppercase tracking-widest text-slate-400">Root Cause Conclusion:</h4>
-                            </div>
-                            <p className="text-lg font-bold text-white leading-tight italic">
-                              "{audit.rootCause}"
-                            </p>
                          </div>
                        </div>
                     </div>
@@ -2755,6 +2648,7 @@ function SmartDiagnosisWidget({ stats }: { stats: DashboardStats }) {
 }
 
 function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: DashboardStats; tagSearch: string; setTagSearch: (v: string) => void }) {
+  const [showAudit, setShowAudit] = React.useState(false);
   const filteredTags = stats.tagLinkIssues.filter(t => 
     (t.info || '').toLowerCase().includes((tagSearch || '').toLowerCase()) || 
     (t.error || '').toLowerCase().includes((tagSearch || '').toLowerCase()) ||
@@ -2763,6 +2657,32 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
 
   return (
     <div className="space-y-8">
+      {/* 0. ROOT CAUSE ACCURACY AUDIT (User Request) */}
+      <div className="glass-card p-0 rounded-3xl overflow-hidden border border-emerald-500/30">
+        <div className="px-6 py-4 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+             <div className="p-2 bg-emerald-500/20 rounded-lg">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+             </div>
+             <div>
+                <h3 className="text-sm font-black text-white uppercase tracking-wider">Root Cause Accuracy Audit</h3>
+                <p className="text-[10px] text-emerald-400/70 font-bold uppercase tracking-widest leading-none mt-1">Comparing Machine Analysis vs Human Ground-Truth</p>
+             </div>
+          </div>
+          <button 
+            onClick={() => setShowAudit(!showAudit)}
+            className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-emerald-500/30"
+          >
+            {showAudit ? 'Collapse Audit' : 'Review 12 Verified Events'}
+          </button>
+        </div>
+        {showAudit && (
+          <div className="p-6 bg-[#0a0f1d]/50">
+            <RootCauseAccuracyAudit />
+          </div>
+        )}
+      </div>
+
       {/* #2 Technical Audit Narrative Report (Deep Event Analysis) */}
       {/* #1 Mode Degradation Events */}
       <div className="space-y-4">
@@ -2774,28 +2694,32 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
           <span className="text-[10px] font-bold text-slate-600 bg-white/5 px-2 py-1 rounded">ROOT CAUSE ANALYSIS ACTIVE</span>
         </div>
 
-        <div className="grid grid-cols-1 gap-6">
+        <div className="grid grid-cols-1 gap-4">
           {stats.modeDegradations.length > 0 ? stats.modeDegradations.map((d, i) => (
             <div key={i} className={cn(
-              "glass-card p-0 rounded-3xl border-l-8 overflow-hidden transition-all hover:translate-x-1 duration-300",
+              "glass-card p-4 rounded-2xl border-l-8 overflow-hidden transition-all hover:translate-x-1 duration-300",
               d.severity === 'critical' ? "border-rose-500" : d.severity === 'warning' ? "border-amber-500" : "border-blue-500"
             )}>
-              {/* Card Header: Time & Location */}
-              <div className="px-6 py-4 bg-white/5 border-b border-white/5 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-6">
+                <div className="flex flex-wrap items-center gap-6">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Timeline</span>
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Time</span>
                     <span className="text-white font-mono font-bold">{d.time}</span>
                   </div>
-                  <div className="h-8 w-px bg-white/10" />
+                  <div className="h-8 w-px bg-white/10 hidden sm:block" />
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Locality</span>
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Station</span>
                     <StationDisplay id={d.stationId} name={d.stationName} />
                   </div>
-                  <div className="h-8 w-px bg-white/10" />
+                  <div className="h-8 w-px bg-white/10 hidden sm:block" />
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Telemetry</span>
-                    <span className="text-emerald-400 font-bold tracking-tight">{d.speed} Kmph | {d.direction}</span>
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Loco No</span>
+                    <span className="text-emerald-400 font-black">{d.locoId}</span>
+                  </div>
+                  <div className="h-8 w-px bg-white/10 hidden sm:block" />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Speed</span>
+                    <span className="text-amber-400 font-bold tabular-nums">{d.speed} Kmph</span>
                   </div>
                 </div>
 
@@ -2804,65 +2728,6 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
                       <span className="text-xs font-black text-emerald-400 uppercase tracking-widest mr-3">{d.from}</span>
                       <ArrowRight className="w-4 h-4 text-slate-600 mr-3" />
                       <span className="text-xs font-black text-rose-400 uppercase tracking-widest">{d.to}</span>
-                   </div>
-                </div>
-              </div>
-
-              {/* Card Body: Context & Root Cause */}
-              <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
-                <div className="lg:col-span-4 flex flex-col gap-4">
-                   <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Kavach Context</h4>
-                   <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
-                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">Loco ID</p>
-                         <p className="text-xs font-black text-emerald-400">{d.locoId}</p>
-                      </div>
-                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
-                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">Radio</p>
-                         <p className="text-xs font-black text-blue-400">{d.radio || 'N/A'}</p>
-                      </div>
-                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
-                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">EMR Status</p>
-                         <p className="text-xs font-black text-rose-400 truncate">{d.emrStatus || 'None'}</p>
-                      </div>
-                      <div className="bg-white/5 p-2 rounded-lg border border-white/5">
-                         <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">NMS Code</p>
-                         <p className="text-xs font-black text-amber-400">{d.nmsAtEvent || '0'}</p>
-                      </div>
-                   </div>
-                   <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-                      <p className="text-[9px] text-slate-500 font-bold uppercase mb-1">Tag Link Payload</p>
-                      <p className="text-[10px] font-mono text-slate-300 leading-tight italic">{d.tagLinkAtEvent || '-'}</p>
-                   </div>
-                </div>
-
-                <div className="lg:col-span-8 space-y-6">
-                   <div>
-                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
-                        <ShieldAlert className="w-3 h-3 text-rose-400" />
-                        Root Cause Conclusion
-                      </h4>
-                      <div className="bg-rose-500/5 border border-rose-500/10 p-5 rounded-2xl relative group/rc">
-                         <p className="text-base font-bold text-white leading-relaxed italic pr-8">
-                           "{d.rootCause}"
-                         </p>
-                         <div className="mt-4 flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-slate-500 border-t border-white/5 pt-4">
-                            <span>Detected Trigger: {d.reason}</span>
-                            <span className="ml-auto opacity-40">System Response: {d.lpResponse}</span>
-                         </div>
-                      </div>
-                   </div>
-
-                   <div className="bg-blue-500/10 border border-blue-500/20 p-5 rounded-2xl flex gap-4 items-start shadow-xl">
-                      <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
-                         <Settings className="w-5 h-5 text-blue-400" />
-                      </div>
-                      <div>
-                         <h5 className="text-xs font-black text-blue-300 uppercase tracking-widest mb-1">Required Action Plan</h5>
-                         <p className="text-sm font-bold text-slate-200 leading-relaxed">
-                           {d.actionRequired}
-                         </p>
-                      </div>
                    </div>
                 </div>
               </div>
@@ -2897,6 +2762,12 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
                       @ <StationDisplay id={b.stationId} name={b.stationName} />
                     </span>
                   </div>
+                  {b.reason && b.reason !== "System Safety Trigger" && (
+                     <div className="mt-2 flex items-center gap-1.5 px-2 py-1 bg-rose-500/10 border border-rose-500/10 rounded-md w-fit">
+                        <ShieldAlert className="w-3 h-3 text-rose-400" />
+                        <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest leading-none">Reason: {b.reason}</span>
+                     </div>
+                  )}
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-bold text-amber-400 tabular-nums">{b.speed} Kmph</p>
@@ -3711,37 +3582,6 @@ function ExecutiveSummary({ stats, setActiveTab }: { stats: DashboardStats; setA
             ]}
           />
           
-          <div className="glass-card p-6 rounded-2xl border-l-4 border-emerald-500 space-y-4">
-            <h4 className="font-bold text-white flex items-center gap-2">
-              <Activity className="w-5 h-5 text-emerald-400" />
-              Root Cause Analysis Conclusion
-            </h4>
-            <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 backdrop-blur-sm">
-              <p className="text-sm text-slate-200 leading-relaxed font-medium">
-                {stats.stationDeepAnalysis.rootCause.conclusion}
-              </p>
-              <div className="flex gap-6 mt-4 pt-4 border-t border-white/5">
-                <div className="flex-1 space-y-1">
-                  <p className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Station-Side</p>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-500" style={{ width: `${stats.stationDeepAnalysis.rootCause.stationSide}%` }} />
-                    </div>
-                    <span className="text-[10px] font-bold text-emerald-400">{stats.stationDeepAnalysis.rootCause.stationSide}%</span>
-                  </div>
-                </div>
-                <div className="flex-1 space-y-1">
-                  <p className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Train-Side</p>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-rose-500" style={{ width: `${stats.stationDeepAnalysis.rootCause.locoSide}%` }} />
-                    </div>
-                    <span className="text-[10px] font-bold text-rose-400">{stats.stationDeepAnalysis.rootCause.locoSide}%</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
 
           <div className="glass-card p-6 rounded-2xl border-l-4 border-emerald-500 space-y-4">
             <h4 className="font-bold text-white flex items-center gap-2">
@@ -3893,8 +3733,8 @@ function DeepMapping({ stats, files }: { stats: DashboardStats; files: { rf: Fil
       id: 5,
       title: `Mode Degradation Events (${stats.modeDegradations.length})`,
       source: files.trn.length > 0 ? files.trn.map(f => f.name).join(', ') : 'N/A',
-      column: "'Mode' and 'Reason'",
-      detail: `The system recorded ${stats.modeDegradations.length} instances where the Kavach mode was downgraded (e.g., FS to OS/SR). Primary reasons detected: ${Array.from(new Set(stats.modeDegradations.map(d => d.reason))).slice(0, 3).join(', ')}.`
+      column: "'Mode'",
+      detail: `The system recorded ${stats.modeDegradations.length} instances where the Kavach mode was downgraded (e.g., FS to OS/SR). These events were analyzed for station-side and loco-side stressors.`
     }] : [])
   ];
 
