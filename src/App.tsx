@@ -725,9 +725,9 @@ export default function App() {
 
       currentY = (doc as any).lastAutoTable.finalY + 15;
 
-      // Operations Summary Table (Station-wise)
+      // --- SECTION 1.2: Station-wise Operations Summary ---
       if (filteredStats.stationSummary && filteredStats.stationSummary.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 30; pageNum++; addFooter(doc, pageNum); }
+        if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(16);
         doc.setTextColor(15, 23, 42);
         doc.text('1.2 Station-wise Operations Summary', 20, currentY);
@@ -755,7 +755,7 @@ export default function App() {
 
       // --- 1.3 Loco-wise Performance Summary ---
       if (filteredStats.locoSummary && filteredStats.locoSummary.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 30; pageNum++; addFooter(doc, pageNum); }
+        if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(16);
         doc.setTextColor(15, 23, 42);
         doc.text('1.3 Loco-wise Performance Summary', 20, currentY);
@@ -781,10 +781,9 @@ export default function App() {
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // --- PAGE: MODE DEGRADATIONS ---
+      // --- SECTION 2: MODE DEGRADATIONS ---
       if (filteredStats.modeDegradations.length > 0) {
-        doc.addPage(); pageNum++; addFooter(doc, pageNum);
-        currentY = 25;
+        if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(245, 158, 11); // Amber-500
         doc.text('2. MODE DEGRADATION ANALYSIS', 20, currentY);
@@ -809,9 +808,9 @@ export default function App() {
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // --- PAGE: BRAKE APPLICATIONS ---
+      // --- SECTION 3: AUTOMATIC BRAKE ACTIVATION LOG ---
       if (filteredStats.brakeApplications.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(239, 68, 68); // Red-500
         doc.text('3. AUTOMATIC BRAKE ACTIVATION LOG', 20, currentY);
@@ -839,7 +838,7 @@ export default function App() {
 
       // SOS Emergency Table
       if (filteredStats.sosEvents.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        if (currentY > 235) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(225, 29, 72); // Rose-600
         doc.text('4. SOS EMERGENCY EVENTS', 20, currentY);
@@ -858,9 +857,8 @@ export default function App() {
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // --- PAGE: DIAGNOSIS & REMEDIATION ---
-      doc.addPage(); pageNum++; addFooter(doc, pageNum);
-      currentY = 25;
+      // --- SECTION 5: FINAL DIAGNOSIS & REMEDIATION ---
+      if (currentY > 220) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
       doc.setFontSize(20);
       doc.setTextColor(15, 23, 42);
       doc.text('5. FINAL DIAGNOSIS & REMEDIATION', 20, currentY);
@@ -869,7 +867,7 @@ export default function App() {
       doc.setLineWidth(1);
       doc.line(20, currentY + 5, pageWidth - 20, currentY + 5);
       
-      currentY += 20;
+      currentY += 12;
 
       filteredStats.diagnosticAdvice.forEach((advice, i) => {
         const titleFormatted = advice.title.replace(/([A-Z])/g, ' $1').trim().toUpperCase();
@@ -904,14 +902,13 @@ export default function App() {
 
       // --- SECTION 6: ROOT CAUSE & PATTERN ANALYSIS ---
       if (filteredStats.smartDiagnosis) {
-        doc.addPage(); pageNum++; addFooter(doc, pageNum);
-        currentY = 25;
+        if (currentY > 220) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(20);
         doc.setTextColor(15, 23, 42);
         doc.text('6. ROOT CAUSE & PATTERN ANALYSIS', 20, currentY);
         
         const sd = filteredStats.smartDiagnosis;
-        currentY += 15;
+        currentY += 12;
 
         // Global Pattern
         if (sd.globalPattern) {
@@ -999,7 +996,7 @@ export default function App() {
       }
 
       // --- SECTION 7: STATION PERFORMANCE SUMMARY ---
-      if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+      if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
       doc.setFontSize(18);
       doc.setTextColor(15, 23, 42);
       doc.text('7. STATION PERFORMANCE SUMMARY', 20, currentY);
@@ -1044,8 +1041,7 @@ export default function App() {
       // --- SECTION 8: RFCOMM PERFORMANCE (TRAIN VS STATION PERSPECTIVE) ---
       const rfcommData = filteredStats.stationDeepAnalysis.dashboard.problem1.table;
       if (rfcommData && rfcommData.length > 0) {
-        doc.addPage(); pageNum++; addFooter(doc, pageNum);
-        currentY = 25;
+        if (currentY > 220) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(15, 23, 42);
         doc.text('8. RFCOMM PERFORMANCE (TRAIN VS STATION VIEW)', 20, currentY);
@@ -1055,7 +1051,7 @@ export default function App() {
         doc.setFont('helvetica', 'italic');
         doc.setTextColor(100);
         doc.text('Visual Performance Comparison (Top 10 Stations):', 20, currentY + 10);
-        currentY += 18;
+        currentY += 14;
 
         const slice = [...rfcommData].slice(0, 10);
         slice.forEach((r) => {
@@ -1109,7 +1105,7 @@ export default function App() {
       }
 
       // --- SECTION 9: DEEP ANALYSIS ---
-      if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+      if (currentY > 240) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
       doc.setFontSize(18);
       doc.setTextColor(59, 130, 246);
       doc.text('9. DEEP ANALYSIS — PACKET LOSS MAPPING', 20, currentY);
@@ -1168,7 +1164,7 @@ export default function App() {
 
       // --- SECTION 10: MOVING RADIO GAP ---
       if (filteredStats.movingRadioLoss.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        if (currentY > 240) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(16, 185, 129);
         doc.text('10. MOVING RADIO LOSS ANALYSIS', 20, currentY);
@@ -1190,7 +1186,7 @@ export default function App() {
 
       // --- SECTION 11: TAG ISSUES ---
       if (filteredStats.tagLinkIssues.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        if (currentY > 240) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(15, 23, 42);
         doc.text('11. TAG LINK & INFRASTRUCTURE DEFECTS', 20, currentY);
@@ -1212,8 +1208,7 @@ export default function App() {
 
       // --- SECTION 12: NMS LOGS ---
       if (filteredStats.nmsLogs.length > 0) {
-        doc.addPage(); pageNum++; addFooter(doc, pageNum);
-        currentY = 25;
+        if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(15, 23, 42);
         doc.text('12. SYSTEM NMS FAILURE LOGS', 20, currentY);
