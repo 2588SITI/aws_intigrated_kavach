@@ -872,20 +872,23 @@ export default function App() {
       currentY += 20;
 
       filteredStats.diagnosticAdvice.forEach((advice, i) => {
+        const titleFormatted = advice.title.replace(/([A-Z])/g, ' $1').trim().toUpperCase();
         const detailLines = doc.splitTextToSize(advice.detail, pageWidth - 50);
         const actionLines = doc.splitTextToSize(`ACTION: ${advice.action}`, pageWidth - 50);
-        // More generous height calculation
-        const boxHeight = 15 + (detailLines.length * 4.5) + (actionLines.length * 5) + 8;
+        
+        // Dynamic height with safety margin
+        const boxHeight = 15 + (detailLines.length * 5) + (actionLines.length * 6) + 12;
 
         if (currentY + boxHeight > 270) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         
-        doc.setFillColor(245, 247, 250);
-        doc.roundedRect(20, currentY, pageWidth - 40, boxHeight, 2, 2, 'F');
+        doc.setFillColor(249, 250, 251);
+        doc.setDrawColor(226, 232, 240);
+        doc.roundedRect(20, currentY, pageWidth - 40, boxHeight, 1.5, 1.5, 'FD');
         
         doc.setTextColor(15, 23, 42);
         doc.setFontSize(11);
         doc.setFont('helvetica', 'bold');
-        doc.text(`${i + 1}. ${advice.title.toUpperCase()}`, 25, currentY + 10);
+        doc.text(`${i + 1}. ${titleFormatted}`, 25, currentY + 10);
         
         doc.setTextColor(71, 85, 105);
         doc.setFontSize(9);
@@ -894,9 +897,9 @@ export default function App() {
         
         doc.setTextColor(59, 130, 246);
         doc.setFont('helvetica', 'bold');
-        doc.text(actionLines, 25, currentY + (18 + detailLines.length * 4.5) + 5);
+        doc.text(actionLines, 25, currentY + 18 + (detailLines.length * 5) + 6);
         
-        currentY += boxHeight + 8;
+        currentY += boxHeight + 10;
       });
 
       // --- SECTION 6: ROOT CAUSE & PATTERN ANALYSIS ---
@@ -912,7 +915,12 @@ export default function App() {
 
         // Global Pattern
         if (sd.globalPattern) {
-          const titleText = `GLOBAL PATTERN: ${sd.globalPattern.issue.toUpperCase()}`;
+          const formattedIssue = sd.globalPattern.issue
+            .replace(/([A-Z])/g, ' $1')
+            .trim()
+            .toUpperCase();
+            
+          const titleText = `GLOBAL PATTERN: ${formattedIssue}`;
           const titleLines = doc.splitTextToSize(titleText, pageWidth - 50);
           
           const incidenceText = `Incidence Rate: ${sd.globalPattern.percentage.toFixed(1)}% of all data rows (${sd.globalPattern.affectedRows.toLocaleString()} rows).`;
@@ -921,7 +929,7 @@ export default function App() {
           const explLines = doc.splitTextToSize(sd.globalPattern.explanation, pageWidth - 50);
           
           // Dynamic box height calculation based on wrapped lines
-          const boxHeight = 12 + (titleLines.length * 5) + (incidenceLines.length * 5) + (explLines.length * 5) + 5;
+          const boxHeight = 15 + (titleLines.length * 6) + (incidenceLines.length * 5) + (explLines.length * 5) + 5;
           
           if (currentY + boxHeight > 270) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
 
@@ -934,7 +942,7 @@ export default function App() {
           doc.setFont('helvetica', 'bold');
           doc.text(titleLines, 25, currentY + 10);
           
-          const incidenceY = currentY + 10 + (titleLines.length * 5);
+          const incidenceY = currentY + 10 + (titleLines.length * 6);
           doc.setFontSize(9);
           doc.setTextColor(71, 85, 105);
           doc.setFont('helvetica', 'normal');
