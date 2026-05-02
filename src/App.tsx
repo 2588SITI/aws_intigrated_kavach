@@ -625,48 +625,111 @@ export default function App() {
       }
       
       const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
       const dateStr = new Date().toLocaleString();
 
-      // Header
-      doc.setFontSize(22);
-      doc.setTextColor(0, 102, 204);
-      doc.text('KAVACH EXPERT DIAGNOSTIC REPORT', 105, 15, { align: 'center' });
+      const addFooter = (doc: jsPDF, pageNumber: number) => {
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(`Kavach Expert Diagnostic System - ${division.toUpperCase()} Division`, 20, pageHeight - 10);
+        doc.text(`Page ${pageNumber}`, pageWidth - 30, pageHeight - 10);
+        doc.line(20, pageHeight - 15, pageWidth - 20, pageHeight - 15);
+      };
+
+      // --- COVER PAGE ---
+      doc.setFillColor(15, 23, 42); // slate-900
+      doc.rect(0, 0, pageWidth, pageHeight, 'F');
       
-      doc.setFontSize(10);
-      doc.setTextColor(100);
-      doc.text(`Generated on: ${dateStr}`, 105, 22, { align: 'center' });
-      doc.line(20, 25, 190, 25);
-
-      // Data Details (User Requested: Division, Date, etc FIRST)
-      doc.setFontSize(12);
-      doc.setTextColor(0);
+      doc.setDrawColor(16, 185, 129); // emerald-500
+      doc.setLineWidth(1.5);
+      doc.rect(10, 10, pageWidth - 20, pageHeight - 20);
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(32);
       doc.setFont('helvetica', 'bold');
-      doc.text('DATA DETAILS:', 20, 35);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.text(`Division: ${division.toUpperCase()}`, 25, 42);
-      doc.text(`Report Date: ${filteredStats.logDate || stats.logDate || 'All'}`, 25, 47);
-      doc.text(`Loco ID: ${filteredStats.locoId}`, 25, 52);
-      if (selectedStation !== 'All') {
-        doc.text(`Filtered Station: ${formatStationName(selectedStation)}`, 25, 57);
-      }
-
-      // Executive Summary
+      doc.text('KAVACH EXPERT', pageWidth / 2, 80, { align: 'center' });
+      doc.text('DIAGNOSTIC REPORT', pageWidth / 2, 95, { align: 'center' });
+      
+      doc.setDrawColor(255, 255, 255);
+      doc.line(40, 105, pageWidth - 40, 105);
+      
       doc.setFontSize(16);
-      doc.setTextColor(0, 102, 204);
-      doc.text('1. Executive Summary', 20, 70);
-      doc.setFontSize(11);
-      doc.setTextColor(0);
-      doc.text(`Overall Loco Performance: ${filteredStats.locoPerformance.toFixed(2)}%`, 25, 80);
-      doc.text(`NMS Failure Rate: ${filteredStats.nmsFailRate.toFixed(2)}%`, 25, 87);
-      doc.text(`Average MA Refresh Lag: ${filteredStats.avgLag.toFixed(2)}s`, 25, 94);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Division: ${division.toUpperCase()}`, pageWidth / 2, 120, { align: 'center' });
+      doc.text(`Period: ${filteredStats.logDate || stats.logDate || 'Consolidated Analysis'}`, pageWidth / 2, 130, { align: 'center' });
+      
+      doc.setFillColor(16, 185, 129);
+      doc.roundedRect(60, 150, pageWidth - 120, 40, 5, 5, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.text('PERFORMANCE VERDICT', pageWidth / 2, 162, { align: 'center' });
+      doc.setFontSize(22);
+      doc.text(`${filteredStats.locoPerformance.toFixed(1)}%`, pageWidth / 2, 178, { align: 'center' });
+      doc.addPage();
 
-      let currentY = 105;
+      let pageNum = 2;
+      addFooter(doc, pageNum);
 
-      // Operations Summary (Station-wise & Loco-wise)
-      if (filteredStats.stationSummary && filteredStats.stationSummary.length > 0) {
+      // KPI Boxes
+      doc.setTextColor(15, 23, 42);
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.text('1. EXECUTIVE SUMMARY', 20, 30);
+      
+      const drawKPI = (x: number, y: number, label: string, value: string, subValue: string, color: [number, number, number]) => {
+        doc.setFillColor(color[0], color[1], color[2], 0.1);
+        doc.roundedRect(x, y, 55, 35, 3, 3, 'F');
+        doc.setDrawColor(color[0], color[1], color[2]);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(x, y, 55, 35, 3, 3, 'S');
+        doc.setTextColor(color[0], color[1], color[2]);
+        doc.setFontSize(9);
+        doc.text(label.toUpperCase(), x + 27.5, y + 10, { align: 'center' });
         doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
+        doc.setFont('helvetica', 'bold');
+        doc.text(value, x + 27.5, y + 22, { align: 'center' });
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(subValue, x + 27.5, y + 30, { align: 'center' });
+      };
+
+      drawKPI(20, 45, 'Overall Health', `${filteredStats.locoPerformance.toFixed(1)}%`, 'RFCOMM Packet Delivery', [16, 185, 129]);
+      drawKPI(77.5, 45, 'NMS Fault Rate', `${filteredStats.nmsFailRate.toFixed(2)}%`, `${filteredStats.nmsLogs.length} Events`, [239, 68, 68]);
+      drawKPI(135, 45, 'Radio Lag', `${filteredStats.avgLag.toFixed(2)}s`, 'MA Average Interval', [59, 130, 246]);
+
+      let currentY = 100;
+
+      // Safety Summary Table
+      doc.setFontSize(16);
+      doc.setTextColor(15, 23, 42);
+      doc.text('1.1 Safety Integrity Profile', 20, currentY);
+      
+      const ebCount = filteredStats.brakeApplications.filter(b => b.type.includes('EB')).length;
+      const fsbCount = filteredStats.brakeApplications.filter(b => b.type.includes('FSB')).length;
+      const modeDegCount = filteredStats.modeDegradations.length;
+
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Safety Metric', 'Event Count', 'Severity Level', 'Action Recommendation']],
+        body: [
+          ['Emergency Brakes (EB)', ebCount, ebCount > 0 ? 'CRITICAL' : 'OPTIMAL', ebCount > 0 ? 'Urgent Root Cause Investigation' : 'Monitor'],
+          ['Service Brakes (FSB/NB)', fsbCount, fsbCount > 5 ? 'HIGH' : 'NORMAL', fsbCount > 5 ? 'Check Signal Feed synchronization' : 'Routine Check'],
+          ['Mode Degradations (FS → SB/SR)', modeDegCount, modeDegCount > 2 ? 'MAJOR' : 'LOW', modeDegCount > 2 ? 'Verify Radio switching logic' : 'Standard Monitor'],
+          ['SOS / Emergency Signal', filteredStats.sosEvents.length, filteredStats.sosEvents.length > 0 ? 'CRITICAL' : 'NONE', 'Verify Emergency Switch Integrity']
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [15, 23, 42] },
+        alternateRowStyles: { fillColor: [245, 247, 250] },
+      });
+
+      currentY = (doc as any).lastAutoTable.finalY + 15;
+
+      // Operations Summary Table (Station-wise)
+      if (filteredStats.stationSummary && filteredStats.stationSummary.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 30; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(16);
+        doc.setTextColor(15, 23, 42);
         doc.text('1.2 Station-wise Operations Summary', 20, currentY);
         
         const stnRows = filteredStats.stationSummary.map(s => [
@@ -681,19 +744,20 @@ export default function App() {
 
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Station Name', 'Locos Passed', 'Mode Deg.', 'Total Brakes', 'EB', 'FSB', 'Attribution']],
+          head: [['Station Name', 'Locos', 'Mode Deg', 'Total Brakes', 'EB', 'FSB', 'Verdict']],
           body: stnRows,
-          theme: 'grid',
+          theme: 'striped',
           headStyles: { fillColor: [16, 185, 129] }, // Emerald-500
           styles: { fontSize: 8 },
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
+      // --- 1.3 Loco-wise Performance Summary ---
       if (filteredStats.locoSummary && filteredStats.locoSummary.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 20; }
+        if (currentY > 210) { doc.addPage(); currentY = 30; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
+        doc.setTextColor(15, 23, 42);
         doc.text('1.3 Loco-wise Performance Summary', 20, currentY);
         
         const locRows = filteredStats.locoSummary.map(l => [
@@ -708,521 +772,459 @@ export default function App() {
 
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Loco No', 'Stations Visited', 'Mode Deg.', 'Total Brakes', 'EB', 'FSB', 'Health Verdict']],
+          head: [['Loco No', 'Stations', 'Degradations', 'Brakes', 'EB', 'FSB', 'Verdict']],
           body: locRows,
-          theme: 'grid',
+          theme: 'striped',
           headStyles: { fillColor: [59, 130, 246] }, // Blue-500
           styles: { fontSize: 8 },
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // Mode Degradation Events (Detailed Analysis) - MOVED TO #2
+      // --- PAGE: MODE DEGRADATIONS ---
       if (filteredStats.modeDegradations.length > 0) {
-        doc.addPage();
-        currentY = 20;
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('2. Mode Degradation & Root Cause Analysis', 20, currentY);
-        currentY += 10;
-
-        filteredStats.modeDegradations.forEach((deg, idx) => {
-          if (currentY > 240) { doc.addPage(); currentY = 20; }
-          
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(9);
-          doc.setTextColor(50);
-          
-          const idStr = formatStationName(deg.stationId);
-          const nameStr = deg.stationName && deg.stationName !== 'N/A' ? formatStationName(deg.stationName) : '';
-          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} (${nameStr})` : (nameStr || idStr);
-
-          doc.text(`${deg.time} | ${deg.from} -> ${deg.to} | STN: ${stnDisplay} | Loco: ${deg.locoId} | Speed: ${deg.speed} Kmph`, 20, currentY + 4);
-          currentY += 8;
-          
-          doc.setDrawColor(240);
-          doc.line(20, currentY, 190, currentY);
-          currentY += 6;
-        });
-      }
-
-      // Brake Applications Table - MOVED TO #3
-      if (filteredStats.brakeApplications.length > 0) {
-        if (currentY > 240) { doc.addPage(); currentY = 20; }
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('3. Brake Applications by Kavach', 20, currentY);
-        
-        const brakeRows = filteredStats.brakeApplications.map(b => {
-          const idStr = formatStationName(b.stationId);
-          const nameStr = b.stationName && b.stationName !== 'N/A' ? formatStationName(b.stationName) : '';
-          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
-
-          return [
-            b.time, 
-            b.locoId,
-            b.type, 
-            `${b.speed} Kmph`, 
-            stnDisplay,
-            b.reason || '-'
-          ];
-        });
-        autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Time', 'Loco No', 'Type', 'Speed', 'Station', 'Reason / Trigger']],
-          body: brakeRows,
-          theme: 'striped',
-          headStyles: { fillColor: [245, 158, 11] }, // Amber-500
-          styles: { fontSize: 8 },
-          columnStyles: {
-            5: { cellWidth: 50 }
-          }
-        });
-        currentY = (doc as any).lastAutoTable.finalY + 15;
-      }
-
-      // SOS Emergency Table - ADDED FOR #4
-      if (filteredStats.sosEvents.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 20; }
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('4. SOS Emergency Events & Alerts', 20, currentY);
-        
-        const sosRows = filteredStats.sosEvents.map(s => {
-          const idStr = formatStationName(s.stationId);
-          const nameStr = s.stationName && s.stationName !== 'N/A' ? formatStationName(s.stationName) : '';
-          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
-          
-          return [
-            s.time,
-            s.type,
-            s.source,
-            s.locoId,
-            stnDisplay
-          ];
-        });
-        autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Time', 'Trigger Type', 'Source', 'Loco No', 'Station Area']],
-          body: sosRows,
-          theme: 'striped',
-          headStyles: { fillColor: [225, 29, 72] }, // Rose-600
-          styles: { fontSize: 8 }
-        });
-        currentY = (doc as any).lastAutoTable.finalY + 15;
-      }
-
-      // Emergency Status Table - MOVED TO #5
-      if (filteredStats.emergencyStatusEvents.length > 0) {
-        if (currentY > 210) { doc.addPage(); currentY = 20; }
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('5. Emergency Status Reports (Non-Regular)', 20, currentY);
-        
-        const emrRows = filteredStats.emergencyStatusEvents.map(e => {
-          const idStr = formatStationName(e.stationId);
-          const nameStr = e.stationName && e.stationName !== 'N/A' ? formatStationName(e.stationName) : '';
-          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
-          
-          return [
-            e.startTime,
-            e.endTime,
-            e.status,
-            e.locoId,
-            stnDisplay
-          ];
-        });
-        autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Start Time', 'Finish Time', 'Emergency Status', 'Loco No', 'Station']],
-          body: emrRows,
-          theme: 'striped',
-          headStyles: { fillColor: [220, 38, 38] }, // Red-600
-          styles: { fontSize: 8 }
-        });
-        currentY = (doc as any).lastAutoTable.finalY + 15;
-      }
-
-      // Smart Diagnosis Section (Root Cause & Pattern Analysis) - MOVED TO #6
-      if (filteredStats.smartDiagnosis) {
-        if (currentY > 210) { doc.addPage(); currentY = 20; }
-        const sd = filteredStats.smartDiagnosis;
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('6. Root Cause & Pattern Analysis', 20, currentY);
-        currentY += 10;
-
-        // Global Pattern
-        if (sd.globalPattern) {
-          doc.setFontSize(12);
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(50);
-          doc.text(`GLOBAL PATTERN: ${sd.globalPattern.issue}`, 25, currentY);
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(10);
-          doc.setTextColor(100);
-          doc.text(`Incidence Rate: ${sd.globalPattern.percentage.toFixed(1)}% of all data rows (${sd.globalPattern.affectedRows.toLocaleString()} rows).`, 30, currentY + 5);
-          const explLines = doc.splitTextToSize(sd.globalPattern.explanation, 160);
-          doc.text(explLines, 30, currentY + 10);
-          currentY += 15 + (explLines.length * 5);
-        }
-
-        // Station Insights
-        if (sd.stationInsights.length > 0) {
-          if (currentY > 240) { doc.addPage(); currentY = 20; }
-          doc.setFontSize(12);
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(50);
-          doc.text('STATION-WISE BLAME / INFRASTRUCTURE DEFECTS:', 25, currentY);
-          currentY += 8;
-          sd.stationInsights.forEach(stn => {
-            if (currentY > 260) { doc.addPage(); currentY = 20; }
-            doc.setFontSize(11);
-            doc.setTextColor(stn.severity === 'Critical' ? 200 : 180, stn.severity === 'Critical' ? 0 : 120, 0);
-            doc.text(`${stn.stationName} — ${stn.severity}`, 30, currentY);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(0);
-            doc.setFontSize(10);
-            doc.text(stn.description, 35, currentY + 5);
-            let detailY = currentY + 10;
-            stn.details.forEach(detail => {
-              const detLines = doc.splitTextToSize(`• ${detail}`, 150);
-              doc.text(detLines, 40, detailY);
-              detailY += (detLines.length * 5);
-            });
-            currentY = detailY + 5;
-          });
-        }
-
-        // Loco Side Faults
-        if (sd.locoInsights.length > 0) {
-          if (currentY > 240) { doc.addPage(); currentY = 20; }
-          doc.setFontSize(12);
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(0, 102, 204);
-          doc.text('LOCOMOTIVE HARDWARE ALERTS:', 25, currentY);
-          currentY += 8;
-          sd.locoInsights.forEach(loco => {
-            if (currentY > 260) { doc.addPage(); currentY = 20; }
-            doc.setFontSize(11);
-            doc.setTextColor(0);
-            doc.text(`Loco ${loco.locoId}: ${loco.issue}`, 30, currentY);
-            doc.setFontSize(9);
-            doc.setTextColor(100);
-            doc.setFont('helvetica', 'italic');
-            doc.text(`Context: ${loco.context}`, 35, currentY + 5);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(20, 100, 20);
-            doc.text(`Recommendation: ${loco.recommendation}`, 35, currentY + 10);
-            currentY += 18;
-          });
-        }
-
-        // Safety Protections
-        if (sd.protectionEvents.length > 0) {
-           if (currentY > 240) { doc.addPage(); currentY = 20; }
-           doc.setFontSize(12);
-           doc.setFont('helvetica', 'bold');
-           doc.setTextColor(16, 185, 129);
-           doc.text('KAVACH SAFETY PROTECTION LOGS:', 25, currentY);
-           currentY += 8;
-           sd.protectionEvents.forEach(pe => {
-             doc.setFontSize(10);
-             doc.setTextColor(0);
-             doc.text(`${pe.time} | ${pe.event} at ${formatStationName(pe.stationId)} (Loco ${pe.locoId})`, 30, currentY);
-             doc.setFontSize(9);
-             doc.setTextColor(80);
-             doc.setFont('helvetica', 'normal');
-             const analLines = doc.splitTextToSize(`Analysis: ${pe.analysis}`, 150);
-             doc.text(analLines, 35, currentY + 5);
-             currentY += 8 + (analLines.length * 4);
-           });
-        }
-
-        currentY += 10;
-      }
-
-      // Tag Issues Table (User Requested: SHIFTED TO SEVENTH POSITION)
-      const tagIssues = filteredStats.tagLinkIssues;
-      if (tagIssues.length > 0) {
-        if (currentY > 240) { doc.addPage(); currentY = 20; }
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('7. Tag Link Issues (Defects Analysis)', 20, currentY);
-        
-        const tagRows = tagIssues.map(t => {
-          const idStr = formatStationName(t.stationId);
-          const nameStr = t.stationName && t.stationName !== 'N/A' ? formatStationName(t.stationName) : '';
-          const stnDisplay = (idStr !== 'N/A' && nameStr && idStr !== nameStr) ? `${idStr} | ${nameStr}` : (nameStr || idStr);
-          
-          return [t.time, t.locoId, stnDisplay, t.error, t.info];
-        });
-        autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Time', 'Loco No', 'Station ID', 'Error Type', 'Details']],
-          body: tagRows,
-          theme: 'striped',
-          headStyles: { fillColor: [0, 102, 204] },
-          styles: { fontSize: 7 }
-        });
-        currentY = (doc as any).lastAutoTable.finalY + 15;
-      }
-
-      // Diagnostic Advice
-      if (currentY > 240) { doc.addPage(); currentY = 20; }
-      
-      // Section 8: Diagnostic Advice
-      doc.setFontSize(16);
-      doc.setTextColor(0, 102, 204);
-      doc.text('8. Diagnostic Advice & Recommendations', 20, currentY);
-      
-      let adviceY = currentY + 10;
-      filteredStats.diagnosticAdvice.forEach((advice, index) => {
-        if (adviceY > 270) { doc.addPage(); adviceY = 20; }
-        doc.setFontSize(11);
-        doc.setTextColor(0);
-        doc.text(`${index + 1}. ${advice.title} (${advice.severity.toUpperCase()})`, 25, adviceY);
-        doc.setFontSize(9);
-        doc.setTextColor(80);
-        const actionLines = doc.splitTextToSize(`Action: ${advice.action}`, 160);
-        doc.text(actionLines, 30, adviceY + 5);
-        adviceY += 10 + (actionLines.length * 4);
-      });
-
-      // 6. Station Performance Summary
-      if (adviceY > 240) { doc.addPage(); adviceY = 20; }
-      // Section 9: Station Performance
-      doc.setFontSize(16);
-      doc.setTextColor(0, 102, 204);
-      doc.text('9. Station Performance Summary', 20, adviceY);
-      
-      let stnY = adviceY + 10;
-      
-      if (filteredStats.unhealthyStns && filteredStats.unhealthyStns.length > 0) {
-        doc.setFontSize(11);
-        doc.setTextColor(220, 50, 50); // Rose-500
-        doc.text('🔴 Unhealthy Stations (<85%):', 25, stnY);
-        doc.setFontSize(9);
-        doc.setTextColor(0);
-        const text = filteredStats.unhealthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
-        const lines = doc.splitTextToSize(text, 160);
-        doc.text(lines, 30, stnY + 5);
-        stnY += 10 + (lines.length * 4);
-      }
-      
-      if (filteredStats.warningStns && filteredStats.warningStns.length > 0) {
-        if (stnY > 270) { doc.addPage(); stnY = 20; }
-        doc.setFontSize(11);
+        doc.addPage(); pageNum++; addFooter(doc, pageNum);
+        currentY = 25;
+        doc.setFontSize(18);
         doc.setTextColor(245, 158, 11); // Amber-500
-        doc.text('🟡 Warning Stations (85-95%):', 25, stnY);
-        doc.setFontSize(9);
-        doc.setTextColor(0);
-        const text = filteredStats.warningStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
-        const lines = doc.splitTextToSize(text, 160);
-        doc.text(lines, 30, stnY + 5);
-        stnY += 10 + (lines.length * 4);
-      }
-      
-      if (filteredStats.healthyStns && filteredStats.healthyStns.length > 0) {
-        if (stnY > 270) { doc.addPage(); stnY = 20; }
-        doc.setFontSize(11);
-        doc.setTextColor(16, 185, 129); // Emerald-500
-        doc.text('🟢 Healthy Stations (>95%):', 25, stnY);
-        doc.setFontSize(9);
-        doc.setTextColor(0);
-        const text = filteredStats.healthyStns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
-        const lines = doc.splitTextToSize(text, 160);
-        doc.text(lines, 30, stnY + 5);
-        stnY += 10 + (lines.length * 4);
+        doc.text('2. MODE DEGRADATION ANALYSIS', 20, currentY);
+        
+        const degRows = filteredStats.modeDegradations.map(deg => [
+          deg.time, 
+          `${deg.from} → ${deg.to}`, 
+          formatStationName(deg.stationName || deg.stationId), 
+          deg.locoId, 
+          `${deg.speed || 0} Kmph`, 
+          deg.radio || '-'
+        ]);
+
+        autoTable(doc, {
+          startY: currentY + 10,
+          head: [['Time', 'Transition', 'Station', 'Loco No', 'Speed', 'Radio Unit']],
+          body: degRows,
+          theme: 'grid',
+          headStyles: { fillColor: [245, 158, 11] },
+          styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // 4. Deep Analysis Section (New Page)
-      doc.addPage();
-      currentY = 20;
-      doc.setFontSize(18);
-      doc.setTextColor(0, 102, 204);
-      doc.text('10. Deep Analysis — Packet Loss Root Cause', 20, currentY);
+      // --- PAGE: BRAKE APPLICATIONS ---
+      if (filteredStats.brakeApplications.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(18);
+        doc.setTextColor(239, 68, 68); // Red-500
+        doc.text('3. AUTOMATIC BRAKE ACTIVATION LOG', 20, currentY);
+        
+        const brakeRows = filteredStats.brakeApplications.map(b => [
+          b.time, 
+          b.type, 
+          formatStationName(b.stationName || b.stationId), 
+          b.locoId, 
+          `${b.speed} Kmph`, 
+          b.reason || '-'
+        ]);
+
+        autoTable(doc, {
+          startY: currentY + 10,
+          head: [['Time', 'Brake Type', 'Station', 'Loco No', 'Entry Speed', 'Root Cause / Warning']],
+          body: brakeRows,
+          theme: 'grid',
+          headStyles: { fillColor: [220, 38, 38] },
+          styles: { fontSize: 8 },
+          columnStyles: { 5: { cellWidth: 50 } }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // SOS Emergency Table
+      if (filteredStats.sosEvents.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(18);
+        doc.setTextColor(225, 29, 72); // Rose-600
+        doc.text('4. SOS EMERGENCY EVENTS', 20, currentY);
+        
+        const sosRows = filteredStats.sosEvents.map(s => [
+          s.time, s.type, s.source, s.locoId, formatStationName(s.stationName || s.stationId)
+        ]);
+        autoTable(doc, {
+          startY: currentY + 10,
+          head: [['Time', 'Type', 'Source', 'Loco No', 'Location']],
+          body: sosRows,
+          theme: 'grid',
+          headStyles: { fillColor: [225, 29, 72] },
+          styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // --- PAGE: DIAGNOSIS & REMEDIATION ---
+      doc.addPage(); pageNum++; addFooter(doc, pageNum);
+      currentY = 25;
+      doc.setFontSize(20);
+      doc.setTextColor(15, 23, 42);
+      doc.text('5. FINAL DIAGNOSIS & REMEDIATION', 20, currentY);
       
-      doc.setFontSize(11);
-      doc.setTextColor(0);
-      doc.setFont('helvetica', 'bold');
-      doc.text(`Conclusion: ${filteredStats.stationDeepAnalysis.dashboard.conclusion}`, 20, currentY + 10);
-      doc.setFont('helvetica', 'normal');
+      doc.setDrawColor(59, 130, 246);
+      doc.setLineWidth(1);
+      doc.line(20, currentY + 5, pageWidth - 20, currentY + 5);
       
       currentY += 20;
 
-      // Verdict Boxes (Visual)
-      const isLFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Suspect') || filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
-      const isSFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Station') || filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
-      
-      doc.setFillColor(isLFaulty ? 255 : 240, isLFaulty ? 230 : 240, isLFaulty ? 230 : 240);
-      doc.rect(20, currentY, 55, 30, 'F');
-      doc.setTextColor(isLFaulty ? 200 : 100, 0, 0);
-      doc.setFontSize(10);
-      doc.text('LOCO TCAS', 47.5, currentY + 10, { align: 'center' });
-      doc.setFontSize(14);
-      doc.text(isLFaulty ? 'SUSPECT' : 'FIT', 47.5, currentY + 22, { align: 'center' });
+      filteredStats.diagnosticAdvice.forEach((advice, i) => {
+        const detailLines = doc.splitTextToSize(advice.detail, pageWidth - 50);
+        const actionLines = doc.splitTextToSize(`ACTION: ${advice.action}`, pageWidth - 50);
+        // More generous height calculation
+        const boxHeight = 15 + (detailLines.length * 4.5) + (actionLines.length * 5) + 8;
 
-      doc.setFillColor(isSFaulty ? 255 : 240, isSFaulty ? 245 : 240, isSFaulty ? 230 : 240);
-      doc.rect(77.5, currentY, 55, 30, 'F');
-      doc.setTextColor(isSFaulty ? 180 : 100, isSFaulty ? 120 : 100, 0);
-      doc.setFontSize(10);
-      doc.text('STATION TCAS', 105, currentY + 10, { align: 'center' });
-      doc.setFontSize(14);
-      doc.text(isSFaulty ? 'INSPECT' : 'HEALTHY', 105, currentY + 22, { align: 'center' });
-
-      doc.setFillColor(230, 255, 230);
-      doc.rect(135, currentY, 55, 30, 'F');
-      doc.setTextColor(0, 150, 0);
-      doc.setFontSize(10);
-      doc.text('BENCHMARK', 162.5, currentY + 10, { align: 'center' });
-      doc.setFontSize(14);
-      doc.text('CLEARED', 162.5, currentY + 22, { align: 'center' });
-
-      currentY += 40;
-
-      // Loco Journey Table
-      doc.setTextColor(0);
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Loco Journey Performance Map', 20, currentY);
-      
-      const journeyRows = filteredStats.stationDeepAnalysis.dashboard.problem1.table.map(r => [formatStationName(r.station), r.locoVal, r.othersAvg]);
-      autoTable(doc, {
-        startY: currentY + 5,
-        head: [['Station', `Loco ${filteredStats.locoId}`, 'Baaki Locos (Avg)']],
-        body: journeyRows,
-        theme: 'grid',
-        headStyles: { fillColor: [50, 50, 50] },
-        styles: { fontSize: 9 }
-      });
-      currentY = (doc as any).lastAutoTable.finalY + 15;
-
-      // Multi-Loco Cross-Check
-      if (filteredStats.multiLocoBadStns.length > 0) {
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Multi-Loco Station Cross-Check', 20, currentY);
+        if (currentY + boxHeight > 270) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         
-        const crossRows = filteredStats.multiLocoBadStns.map(s => [
-          formatStationName(s.stationId), 
-          s.locoCount, 
-          `${s.avgPerf.toFixed(1)}%`,
-          s.locoCount >= 3 ? 'PRIORITY INSPECTION' : 'ROUTINE CHECK'
-        ]);
+        doc.setFillColor(245, 247, 250);
+        doc.roundedRect(20, currentY, pageWidth - 40, boxHeight, 2, 2, 'F');
+        
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`${i + 1}. ${advice.title.toUpperCase()}`, 25, currentY + 10);
+        
+        doc.setTextColor(71, 85, 105);
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.text(detailLines, 25, currentY + 18);
+        
+        doc.setTextColor(59, 130, 246);
+        doc.setFont('helvetica', 'bold');
+        doc.text(actionLines, 25, currentY + (18 + detailLines.length * 4.5) + 5);
+        
+        currentY += boxHeight + 8;
+      });
+
+      // --- SECTION 6: ROOT CAUSE & PATTERN ANALYSIS ---
+      if (filteredStats.smartDiagnosis) {
+        doc.addPage(); pageNum++; addFooter(doc, pageNum);
+        currentY = 25;
+        doc.setFontSize(20);
+        doc.setTextColor(15, 23, 42);
+        doc.text('6. ROOT CAUSE & PATTERN ANALYSIS', 20, currentY);
+        
+        const sd = filteredStats.smartDiagnosis;
+        currentY += 15;
+
+        // Global Pattern
+        if (sd.globalPattern) {
+          const titleText = `GLOBAL PATTERN: ${sd.globalPattern.issue.toUpperCase()}`;
+          const titleLines = doc.splitTextToSize(titleText, pageWidth - 50);
+          
+          const incidenceText = `Incidence Rate: ${sd.globalPattern.percentage.toFixed(1)}% of all data rows (${sd.globalPattern.affectedRows.toLocaleString()} rows).`;
+          const incidenceLines = doc.splitTextToSize(incidenceText, pageWidth - 50);
+          
+          const explLines = doc.splitTextToSize(sd.globalPattern.explanation, pageWidth - 50);
+          
+          // Dynamic box height calculation based on wrapped lines
+          const boxHeight = 12 + (titleLines.length * 5) + (incidenceLines.length * 5) + (explLines.length * 5) + 5;
+          
+          if (currentY + boxHeight > 270) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+
+          doc.setFillColor(249, 250, 251);
+          doc.setDrawColor(209, 213, 219);
+          doc.roundedRect(20, currentY, pageWidth - 40, boxHeight, 2, 2, 'FD');
+          
+          doc.setFontSize(11);
+          doc.setTextColor(15, 23, 42);
+          doc.setFont('helvetica', 'bold');
+          doc.text(titleLines, 25, currentY + 10);
+          
+          const incidenceY = currentY + 10 + (titleLines.length * 5);
+          doc.setFontSize(9);
+          doc.setTextColor(71, 85, 105);
+          doc.setFont('helvetica', 'normal');
+          doc.text(incidenceLines, 25, incidenceY);
+          
+          const explY = incidenceY + (incidenceLines.length * 5);
+          doc.text(explLines, 25, explY);
+          
+          currentY += boxHeight + 12;
+        }
+
+        // Infrastructure Defects
+        if (sd.stationInsights.length > 0) {
+          doc.setFontSize(14);
+          doc.setTextColor(15, 23, 42);
+          doc.setFont('helvetica', 'bold');
+          doc.text('STATION-WISE BLAME / INFRASTRUCTURE DEFECTS:', 20, currentY);
+          currentY += 10;
+
+          sd.stationInsights.forEach(stn => {
+            const descLines = doc.splitTextToSize(stn.description, pageWidth - 50);
+            let totalDetailHeight = 0;
+            const detailsProcessed = stn.details.map(d => {
+              const lines = doc.splitTextToSize(`• ${d}`, pageWidth - 55);
+              totalDetailHeight += (lines.length * 5);
+              return lines;
+            });
+
+            const boxHeight = 15 + (descLines.length * 5) + totalDetailHeight + 5;
+            if (currentY + boxHeight > 270) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+
+            doc.setFillColor(254, 242, 242); // Red-50 backdrop
+            doc.setDrawColor(252, 165, 165); // Red-300 border
+            doc.roundedRect(20, currentY, pageWidth - 40, boxHeight, 2, 2, 'FD');
+            
+            doc.setFontSize(11);
+            doc.setTextColor(stn.severity === 'Critical' ? 185 : 15, stn.severity === 'Critical' ? 28 : 23, stn.severity === 'Critical' ? 28 : 42);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`${stn.stationName} — ${stn.severity.toUpperCase()}`, 25, currentY + 10);
+            
+            doc.setFontSize(9);
+            doc.setTextColor(71, 85, 105);
+            doc.setFont('helvetica', 'normal');
+            doc.text(descLines, 25, currentY + 18);
+            
+            let detailY = currentY + 18 + (descLines.length * 5);
+            detailsProcessed.forEach(lines => {
+              doc.text(lines, 30, detailY);
+              detailY += (lines.length * 5);
+            });
+            currentY += boxHeight + 10;
+          });
+        }
+      }
+
+      // --- SECTION 7: STATION PERFORMANCE SUMMARY ---
+      if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+      doc.setFontSize(18);
+      doc.setTextColor(15, 23, 42);
+      doc.text('7. STATION PERFORMANCE SUMMARY', 20, currentY);
+      currentY += 10;
+
+      const drawStnGroup = (title: string, color: [number, number, number], stns: { id: string | number; pct: number }[]) => {
+        if (stns.length === 0) return;
+        const text = stns.map(s => `${formatStationName(s.id)} (${s.pct.toFixed(1)}%)`).join(', ');
+        const lines = doc.splitTextToSize(text, pageWidth - 60);
+        const boxHeight = 22 + (lines.length * 5);
+
+        if (currentY + boxHeight > 270) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        
+        doc.setFillColor(249, 250, 251); // Light grey background
+        doc.setDrawColor(color[0], color[1], color[2]);
+        doc.setLineWidth(1); // Thicker border
+        doc.roundedRect(20, currentY, pageWidth - 40, boxHeight, 1.5, 1.5, 'FD');
+
+        doc.setFontSize(10);
+        doc.setTextColor(color[0], color[1], color[2]);
+        doc.setFont('helvetica', 'bold');
+        doc.text(title.toUpperCase(), 25, currentY + 8);
+        
+        // Progress bar indicator
+        const avg = stns.reduce((acc, curr) => acc + curr.pct, 0) / stns.length;
+        doc.setFillColor(230, 230, 230);
+        doc.rect(25, currentY + 11, pageWidth - 50, 2, 'F');
+        doc.setFillColor(color[0], color[1], color[2]);
+        doc.rect(25, currentY + 11, (pageWidth - 50) * (avg / 100), 2, 'F');
+
+        doc.setFontSize(9);
+        doc.setTextColor(15, 23, 42); // High contrast text
+        doc.setFont('helvetica', 'normal');
+        doc.text(lines, 25, currentY + 18);
+        currentY += boxHeight + 8;
+      };
+
+      drawStnGroup('CRITICAL PERFORMANCE STATIONS (<85%)', [220, 38, 38], filteredStats.unhealthyStns);
+      drawStnGroup('WARNING PERFORMANCE STATIONS (85-95%)', [217, 119, 6], filteredStats.warningStns);
+      drawStnGroup('HEALTHY PERFORMANCE STATIONS (>95%)', [5, 150, 105], filteredStats.healthyStns);
+
+      // --- SECTION 8: RFCOMM PERFORMANCE (TRAIN VS STATION PERSPECTIVE) ---
+      const rfcommData = filteredStats.stationDeepAnalysis.dashboard.problem1.table;
+      if (rfcommData && rfcommData.length > 0) {
+        doc.addPage(); pageNum++; addFooter(doc, pageNum);
+        currentY = 25;
+        doc.setFontSize(18);
+        doc.setTextColor(15, 23, 42);
+        doc.text('8. RFCOMM PERFORMANCE (TRAIN VS STATION VIEW)', 20, currentY);
+        
+        // Visual Chart for Top 10 entries
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(100);
+        doc.text('Visual Performance Comparison (Top 10 Stations):', 20, currentY + 10);
+        currentY += 18;
+
+        const slice = [...rfcommData].slice(0, 10);
+        slice.forEach((r) => {
+          const lVal = Number(r.locoVal);
+          const oAvg = Number(r.othersAvg);
+          
+          doc.setFontSize(7);
+          doc.setTextColor(15, 23, 42);
+          doc.setFont('helvetica', 'bold');
+          doc.text(formatStationName(r.station), 20, currentY);
+          
+          // Train Bar (Blue)
+          doc.setFillColor(59, 130, 246);
+          doc.rect(55, currentY - 3, (lVal * 0.8), 2.5, 'F');
+          
+          // Station Bar (Slate)
+          doc.setFillColor(203, 213, 225);
+          doc.rect(55, currentY + 0.5, (oAvg * 0.8), 2.5, 'F');
+          
+          doc.setFontSize(6);
+          doc.setFont('helvetica', 'normal');
+          doc.text(`T: ${lVal.toFixed(1)}% | S: ${oAvg.toFixed(1)}%`, 55 + Math.max(lVal, oAvg) * 0.8 + 2, currentY + 1);
+          
+          currentY += 8;
+        });
+
+        currentY += 5;
+        
+        const rfRows = rfcommData.map(r => {
+          const lVal = Number(r.locoVal);
+          const oAvg = Number(r.othersAvg);
+          return [
+            formatStationName(r.station),
+            `${lVal.toFixed(2)} %`,
+            `${oAvg.toFixed(2)} %`,
+            lVal >= 98 && oAvg >= 98 ? 'Excellent' : 
+            lVal < oAvg - 5 ? 'Suspect Train' : 
+            oAvg < lVal - 5 ? 'Suspect Station' : 'Consistent'
+          ];
+        });
+
         autoTable(doc, {
-          startY: currentY + 5,
-          head: [['Station', 'Locos Failed', 'Avg Perf', 'Action Required']],
-          body: crossRows,
+          startY: currentY + 10,
+          head: [['Station Name', 'Train View (RFCOMM)', 'Station View (Avg)', 'Comparison Verdict']],
+          body: rfRows,
           theme: 'grid',
-          headStyles: { fillColor: [180, 120, 0] },
-          styles: { fontSize: 9 }
+          headStyles: { fillColor: [15, 23, 42] },
+          styles: { fontSize: 8 }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // Probability Bars
-      if (currentY > 240) { doc.addPage(); currentY = 20; }
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Root Cause Probability Analysis', 20, currentY);
+      // --- SECTION 9: DEEP ANALYSIS ---
+      if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+      doc.setFontSize(18);
+      doc.setTextColor(59, 130, 246);
+      doc.text('9. DEEP ANALYSIS — PACKET LOSS MAPPING', 20, currentY);
       
-      const rc = filteredStats.stationDeepAnalysis.rootCause;
-      const drawBar = (label: string, val: number, y: number, color: [number, number, number]) => {
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Conclusion: ${filteredStats.stationDeepAnalysis.dashboard.conclusion}`, 20, currentY + 10);
+      
+      currentY += 20;
+      const isLFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Suspect') || filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
+      const isSFaulty = filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Station') || filteredStats.stationDeepAnalysis.dashboard.conclusion.includes('Multiple');
+
+      // Status Boxes
+      const drawStatusBox = (x: number, label: string, status: string, color: [number, number, number]) => {
+        doc.setFillColor(color[0], color[1], color[2], 0.1);
+        doc.roundedRect(x, currentY, 55, 30, 2, 2, 'F');
+        doc.setTextColor(color[0], color[1], color[2]);
         doc.setFontSize(9);
-        doc.setTextColor(100);
-        doc.text(label, 20, y);
-        doc.setFillColor(240, 240, 240);
-        doc.rect(60, y - 3, 100, 4, 'F');
-        doc.setFillColor(color[0], color[1], color[2]);
-        doc.rect(60, y - 3, val, 4, 'F');
-        doc.setTextColor(0);
-        doc.text(`${val}%`, 165, y);
+        doc.text(label, x + 27.5, currentY + 10, { align: 'center' });
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text(status, x + 27.5, currentY + 22, { align: 'center' });
       };
 
-      drawBar('Station-side', rc.stationSide, currentY + 10, [16, 185, 129]);
-      drawBar('Loco-side', rc.locoSide, currentY + 18, [244, 63, 94]);
-      drawBar('Hardware Prob.', rc.hardwareProb, currentY + 26, [245, 158, 11]);
-      drawBar('Software Prob.', rc.softwareProb, currentY + 34, [59, 130, 246]);
+      drawStatusBox(20, 'LOCO TCAS', isLFaulty ? 'SUSPECT' : 'FIT', isLFaulty ? [220, 38, 38] : [16, 185, 129]);
+      drawStatusBox(77.5, 'STATION TCAS', isSFaulty ? 'INSPECT' : 'HEALTHY', isSFaulty ? [245, 158, 11] : [16, 185, 129]);
+      drawStatusBox(135, 'BENCHMARK', 'CLEARED', [59, 130, 246]);
 
       currentY += 45;
 
-      // AML Benchmark Conclusion
-      doc.setFontSize(10);
-      doc.setTextColor(0, 150, 0);
-      doc.setFont('helvetica', 'italic');
-      const amlLines = doc.splitTextToSize(filteredStats.stationDeepAnalysis.dashboard.amlConclusion, 160);
-      doc.text(amlLines, 20, currentY);
-      currentY += (amlLines.length * 5) + 5;
-
-
-
-      // Section 11: Moving Radio Loss Analysis (Speed > 0)
-      if (filteredStats.movingRadioLoss && filteredStats.movingRadioLoss.length > 0) {
-        doc.addPage();
-        currentY = 20;
-        doc.setFontSize(18);
-        doc.setTextColor(0, 102, 204);
-        doc.text('11. Moving Radio Loss Analysis (Speed > 0)', 20, currentY);
-        
+      // Probability Chart
+      doc.setFontSize(12);
+      doc.setTextColor(15, 23, 42);
+      doc.text('Root Cause Probability Analysis', 20, currentY);
+      
+      const drawProbBar = (label: string, val: number, y: number, color: [number, number, number]) => {
         doc.setFontSize(9);
         doc.setTextColor(80);
-        const explanation = 'This analysis identifies radio communication gaps specifically when the locomotive is in motion (Speed > 0). It highlights periods where signal reception failed during operational transit. High gap counts or long durations (Max Gap) indicate critical signal blind spots, antenna hardware faults, or R1/R2 radio switching issues that directly impact safety during movement.';
-        const explanationLines = doc.splitTextToSize(explanation, 170);
-        doc.text(explanationLines, 20, currentY + 8);
+        doc.text(label, 20, y);
+        doc.setFillColor(240, 240, 240);
+        doc.roundedRect(60, y - 3, 100, 4, 1, 1, 'F');
+        doc.setFillColor(color[0], color[1], color[2]);
+        doc.roundedRect(60, y - 3, Math.max(2, val), 4, 1, 1, 'F');
+        doc.setTextColor(15, 23, 42);
+        doc.text(`${val}%`, 165, y);
+      };
+
+      const rc = filteredStats.stationDeepAnalysis.rootCause;
+      drawProbBar('Station-side', rc.stationSide, currentY + 10, [16, 185, 129]);
+      drawProbBar('Loco-side', rc.locoSide, currentY + 18, [239, 68, 68]);
+      drawProbBar('Hardware Issue', rc.hardwareProb, currentY + 26, [245, 158, 11]);
+      drawProbBar('Software Logic', rc.softwareProb, currentY + 34, [59, 130, 246]);
+
+      currentY += 45;
+
+      // --- SECTION 10: MOVING RADIO GAP ---
+      if (filteredStats.movingRadioLoss.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(18);
+        doc.setTextColor(16, 185, 129);
+        doc.text('10. MOVING RADIO LOSS ANALYSIS', 20, currentY);
         
-        const movingRows = filteredStats.movingRadioLoss.map(m => [
-          m.locoId,
-          m.movingGaps,
-          `${m.maxGap}s`,
-          `${m.r1Usage}%`,
-          `${m.r2Usage}%`,
-          m.conclusion
+        const movingRows = filteredStats.movingRadioLoss.slice(0, 15).map(m => [
+          m.locoId, m.movingGaps, `${m.maxGap}s`, `${m.r1Usage}%`, `${m.r2Usage}%`, m.conclusion
         ]);
         
         autoTable(doc, {
-          startY: currentY + 8 + (explanationLines.length * 5),
-          head: [['Loco ID', 'Moving Gaps', 'Max Gap', 'R1 Usage', 'R2 Usage', 'Conclusion']],
+          startY: currentY + 10,
+          head: [['Loco ID', 'Gap Count', 'Max Gap', 'R1 %', 'R2 %', 'Verdict']],
           body: movingRows,
           theme: 'grid',
-          headStyles: { fillColor: [16, 185, 129] }, // Emerald-600
-          styles: { fontSize: 9 }
+          headStyles: { fillColor: [16, 185, 129] },
+          styles: { fontSize: 8 }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // NMS Failure Table
+      // --- SECTION 11: TAG ISSUES ---
+      if (filteredStats.tagLinkIssues.length > 0) {
+        if (currentY > 210) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(18);
+        doc.setTextColor(15, 23, 42);
+        doc.text('11. TAG LINK & INFRASTRUCTURE DEFECTS', 20, currentY);
+        
+        const tagRows = filteredStats.tagLinkIssues.slice(0, 15).map(t => [
+          t.time, t.locoId, formatStationName(t.stationName || t.stationId), t.error, t.info
+        ]);
+        
+        autoTable(doc, {
+          startY: currentY + 10,
+          head: [['Time', 'Loco', 'Station', 'Defect Type', 'Diagnostic Info']],
+          body: tagRows,
+          theme: 'grid',
+          headStyles: { fillColor: [71, 85, 105] },
+          styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // --- SECTION 12: NMS LOGS ---
       if (filteredStats.nmsLogs.length > 0) {
-        doc.addPage();
-        // Section 12: NMS Failure Logs
-        doc.setFontSize(16);
-        doc.setTextColor(0, 102, 204);
-        doc.text('12. System NMS Failure Logs (Top 30)', 20, 20);
+        doc.addPage(); pageNum++; addFooter(doc, pageNum);
+        currentY = 25;
+        doc.setFontSize(18);
+        doc.setTextColor(15, 23, 42);
+        doc.text('12. SYSTEM NMS FAILURE LOGS', 20, currentY);
         
         const nmsRows = filteredStats.nmsLogs.slice(0, 30).map(n => [n.time, n.locoId, n.health, n.status]);
         autoTable(doc, {
-          startY: 25,
+          startY: currentY + 10,
           head: [['Time', 'Loco No', 'Health Code', 'Status']],
           body: nmsRows,
           theme: 'striped',
-          headStyles: { fillColor: [50, 50, 50] },
+          headStyles: { fillColor: [30, 41, 59] },
           styles: { fontSize: 8 }
         });
       }
 
-      // Signature
-      const pageCount = doc.getNumberOfPages();
-      doc.setPage(pageCount);
-      doc.setFontSize(12);
-      doc.setTextColor(0);
-      doc.text('__________________________', 140, 270);
-      doc.text('Authorized Signature', 140, 277);
-      doc.text('Kavach Technical Team', 140, 284);
-
-      doc.save(`Kavach_Report_Loco_${filteredStats.locoId}${selectedStation !== 'All' ? '_Stn_' + formatStationName(selectedStation).replace(/\s+/g, '_') : ''}.pdf`);
-    } catch (error) {
-      console.error("PDF Generation Error:", error);
-      alert("There was an issue generating the report. Please check the console.");
+      doc.save(`Kavach_Expert_Report_${division}_${filteredStats.locoId}_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err: any) {
+      console.error('Error generating PDF:', err);
+      alert('PDF generation failed. Check console.');
     }
   };
 
@@ -3765,6 +3767,33 @@ function ExecutiveSummary({ stats, setActiveTab }: { stats: DashboardStats; setA
             items={[
               { label: "Sync Analysis", status: stats.avgLag <= 1.2 ? "Healthy" : "Warning", reason: `AR: ${stats.arCount} | MA: ${stats.maCount}. Ratio: ${((stats.maCount / (stats.arCount || 1)) * 100).toFixed(1)}%.` },
               { label: "Packet Interval Analysis", status: stats.avgLag <= 1.0 ? "Healthy" : "Warning", reason: `Average MA interval: ${stats.avgLag.toFixed(2)}s. RDSO standard is 1.0s.` }
+            ]}
+          />
+
+          <StatusBox 
+            title="3. Safety & Operational Events"
+            items={[
+              { 
+                label: "MODE DEGRADATIONS", 
+                status: stats.modeDegradations.length > 5 ? "Unhealthy" : stats.modeDegradations.length > 0 ? "Warning" : "Healthy", 
+                reason: stats.modeDegradations.length > 0 
+                  ? `Detected ${stats.modeDegradations.length} Mode Change(s). Check radio switching logic in Expert Diagnostics.` 
+                  : "No mode changes detected." 
+              },
+              { 
+                label: "BRAKE ACTIVATIONS", 
+                status: stats.brakeApplications.length > 0 ? "Warning" : "Healthy", 
+                reason: stats.brakeApplications.length > 0 
+                  ? `${stats.brakeApplications.length} Automatic brake events logged. See Interval Analysis & PDF for details.` 
+                  : "No automatic brake applications identified." 
+              },
+              { 
+                label: "EMERGENCY BRAKES", 
+                status: stats.brakeApplications.filter(b => b.type.includes('EB')).length > 0 ? "Unhealthy" : "Healthy", 
+                reason: stats.brakeApplications.filter(b => b.type.includes('EB')).length > 0 
+                  ? `${stats.brakeApplications.filter(b => b.type.includes('EB')).length} Emergency Brake (EB) event(s). Urgent root cause analysis required.` 
+                  : "Zero Emergency Brake (EB) activations detected." 
+              }
             ]}
           />
           
