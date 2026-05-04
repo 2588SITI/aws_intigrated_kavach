@@ -103,6 +103,13 @@ export default function App() {
   const [startDate, setStartDate] = useState<string>('All');
   const [endDate, setEndDate] = useState<string>('All');
   
+  // Manual Remarks State for PDF
+  const [manualRemarks, setManualRemarks] = useState<Record<string, string>>({});
+
+  const updateRemark = (key: string, value: string) => {
+    setManualRemarks(prev => ({ ...prev, [key]: value }));
+  };
+  
   // Cloud Storage State
   const [isAwsConnected, setIsAwsConnected] = useState(false);
   const [cloudFiles, setCloudFiles] = useState<any[]>([]);
@@ -794,16 +801,20 @@ export default function App() {
           formatStationName(deg.stationName || deg.stationId), 
           deg.locoId, 
           `${deg.speed || 0} Kmph`, 
-          deg.radio || '-'
+          deg.radio || '-',
+          manualRemarks[`deg-${deg.time}-${deg.locoId}`] || ''
         ]);
 
         autoTable(doc, {
           startY: currentY + 10,
-          head: [['Time', 'Transition', 'Station', 'Loco No', 'Speed', 'Radio Unit']],
+          head: [['Time', 'Transition', 'Station', 'Loco No', 'Speed', 'Radio Unit', 'Staff Reason / Remarks']],
           body: degRows,
           theme: 'grid',
           headStyles: { fillColor: [245, 158, 11] },
-          styles: { fontSize: 8 }
+          styles: { fontSize: 7 },
+          columnStyles: {
+            6: { cellWidth: 40 }
+          }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
@@ -821,17 +832,18 @@ export default function App() {
           formatStationName(b.stationName || b.stationId), 
           b.locoId, 
           `${b.speed} Kmph`, 
-          b.reason || '-'
+          b.radio || '-',
+          manualRemarks[`brake-${b.time}-${b.locoId}`] || ''
         ]);
 
         autoTable(doc, {
           startY: currentY + 10,
-          head: [['Time', 'Brake Type', 'Station', 'Loco No', 'Entry Speed', 'Root Cause / Warning']],
+          head: [['Time', 'Brake Type', 'Station', 'Loco No', 'Speed', 'Radio Unit', 'Staff Reason / Remarks']],
           body: brakeRows,
           theme: 'grid',
           headStyles: { fillColor: [220, 38, 38] },
-          styles: { fontSize: 8 },
-          columnStyles: { 5: { cellWidth: 50 } }
+          styles: { fontSize: 7 },
+          columnStyles: { 6: { cellWidth: 50 } }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
@@ -1034,9 +1046,14 @@ export default function App() {
         currentY += boxHeight + 8;
       };
 
-      drawStnGroup('CRITICAL PERFORMANCE STATIONS (<85%)', [220, 38, 38], filteredStats.unhealthyStns);
-      drawStnGroup('WARNING PERFORMANCE STATIONS (85-95%)', [217, 119, 6], filteredStats.warningStns);
-      drawStnGroup('HEALTHY PERFORMANCE STATIONS (>95%)', [5, 150, 105], filteredStats.healthyStns);
+      const allStns = [...filteredStats.unhealthyStns, ...filteredStats.warningStns, ...filteredStats.healthyStns];
+      const redGroup = allStns.filter(s => s.pct < 90);
+      const saffronGroup = allStns.filter(s => s.pct >= 90 && s.pct <= 95);
+      const greenGroup = allStns.filter(s => s.pct > 95);
+
+      drawStnGroup('BAD PERFORMANCE STATIONS (<90%)', [220, 38, 38], redGroup);
+      drawStnGroup('MODERATE PERFORMANCE STATIONS (90% - 95%)', [255, 153, 51], saffronGroup);
+      drawStnGroup('GOOD PERFORMANCE STATIONS (>95%)', [5, 150, 105], greenGroup);
 
       // --- SECTION 8: RFCOMM PERFORMANCE (TRAIN VS STATION PERSPECTIVE) ---
       const rfcommData = filteredStats.stationDeepAnalysis.dashboard.problem1.table;
@@ -2041,7 +2058,15 @@ export default function App() {
             {activeTab === 'mapping' && filteredStats && <DeepMapping stats={filteredStats} files={files} />}
             {activeTab === 'station' && filteredStats && <StationAnalysis stats={filteredStats} />}
             {activeTab === 'ops' && filteredStats && <OperationsSummary stats={filteredStats} />}
-            {activeTab === 'expert' && filteredStats && <ExpertDiagnostics stats={filteredStats} tagSearch={tagSearch} setTagSearch={setTagSearch} />}
+            {activeTab === 'expert' && filteredStats && (
+              <ExpertDiagnostics 
+                stats={filteredStats} 
+                tagSearch={tagSearch} 
+                setTagSearch={setTagSearch} 
+                remarks={manualRemarks}
+                onUpdateRemark={updateRemark}
+              />
+            )}
             {activeTab === 'nms' && filteredStats && <NMSAnalysis stats={filteredStats} />}
             {activeTab === 'sync' && filteredStats && <SyncAnalysis stats={filteredStats} />}
             {activeTab === 'interval' && filteredStats && <IntervalAnalysis stats={filteredStats} />}
@@ -2838,7 +2863,19 @@ function SmartDiagnosisWidget({ stats }: { stats: DashboardStats }) {
   );
 }
 
-function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: DashboardStats; tagSearch: string; setTagSearch: (v: string) => void }) {
+function ExpertDiagnostics({ 
+  stats, 
+  tagSearch, 
+  setTagSearch,
+  remarks,
+  onUpdateRemark
+}: { 
+  stats: DashboardStats; 
+  tagSearch: string; 
+  setTagSearch: (v: string) => void;
+  remarks: Record<string, string>;
+  onUpdateRemark: (key: string, value: string) => void;
+}) {
   const [showAudit, setShowAudit] = React.useState(false);
   const filteredTags = stats.tagLinkIssues.filter(t => 
     (t.info || '').toLowerCase().includes((tagSearch || '').toLowerCase()) || 
@@ -2922,6 +2959,23 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
                    </div>
                 </div>
               </div>
+
+              {/* Editable Reason Field */}
+              <div className="mt-4 pt-4 border-t border-white/5">
+                 <div className="flex items-center justify-between mb-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                       <ClipboardList className="w-3 h-3 text-emerald-400" />
+                       Technical Reason & Staff Remediation
+                    </label>
+                    <span className="text-[9px] font-bold text-emerald-500/50 uppercase italic">Input here auto-populates in PDF Report</span>
+                 </div>
+                 <textarea
+                    placeholder="Type the genuine technical reason or staff findings for this degradation..."
+                    className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-all min-h-[80px] resize-none"
+                    value={remarks[`deg-${d.time}-${d.locoId}`] || ''}
+                    onChange={(e) => onUpdateRemark(`deg-${d.time}-${d.locoId}`, e.target.value)}
+                 />
+              </div>
             </div>
           )) : (
             <div className="bg-white/5 border border-dashed border-white/10 p-12 rounded-3xl text-center">
@@ -2941,28 +2995,42 @@ function ExpertDiagnostics({ stats, tagSearch, setTagSearch }: { stats: Dashboar
           </h3>
           <div className="space-y-3">
             {stats.brakeApplications.length > 0 ? stats.brakeApplications.map((b, i) => (
-              <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center group hover:bg-white/10 transition-all">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase tracking-tighter">Loco {b.locoId}</span>
-                    <p className="text-xs font-bold text-white uppercase tracking-tight">{b.type}</p>
+              <div key={i} className="bg-white/5 p-4 rounded-xl border border-white/5 flex flex-col gap-3 group hover:bg-white/10 transition-all">
+                <div className="flex justify-between items-center text-left">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1 text-left">
+                      <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 py-0.5 rounded uppercase tracking-tighter">Loco {b.locoId}</span>
+                      <p className="text-xs font-bold text-white uppercase tracking-tight">{b.type}</p>
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-medium text-left">
+                      {b.time} | Loc: {b.location}
+                      <span className="ml-2 text-emerald-400 font-bold uppercase inline-flex items-center gap-1">
+                        @ <StationDisplay id={b.stationId} name={b.stationName} />
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-[10px] text-slate-500 font-medium">
-                    {b.time} | Loc: {b.location}
-                    <span className="ml-2 text-emerald-400 font-bold uppercase inline-flex items-center gap-1">
-                      @ <StationDisplay id={b.stationId} name={b.stationName} />
-                    </span>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-amber-400 tabular-nums">{b.speed} Kmph</p>
                   </div>
-                  {b.reason && b.reason !== "System Safety Trigger" && (
-                     <div className="mt-2 flex items-center gap-1.5 px-2 py-1 bg-rose-500/10 border border-rose-500/10 rounded-md w-fit">
-                        <ShieldAlert className="w-3 h-3 text-rose-400" />
-                        <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest leading-none">Reason: {b.reason}</span>
-                     </div>
-                  )}
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-amber-400 tabular-nums">{b.speed} Kmph</p>
+
+                <div className="space-y-1">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Technician Remarks:</p>
+                  <input
+                    type="text"
+                    placeholder="Enter reason for brake activation..."
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500/50 transition-all"
+                    value={remarks[`brake-${b.time}-${b.locoId}`] || ''}
+                    onChange={(e) => onUpdateRemark(`brake-${b.time}-${b.locoId}`, e.target.value)}
+                  />
                 </div>
+
+                {b.reason && b.reason !== "System Safety Trigger" && (
+                   <div className="mt-1 flex items-center gap-1.5 px-2 py-1 bg-rose-500/10 border border-rose-500/10 rounded-md w-fit">
+                      <ShieldAlert className="w-3 h-3 text-rose-400" />
+                      <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest leading-none">Automated Reason: {b.reason}</span>
+                   </div>
+                )}
               </div>
             )) : <p className="text-center py-8 text-slate-500 text-sm italic">No brake applications recorded.</p>}
           </div>
