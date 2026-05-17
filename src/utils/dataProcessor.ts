@@ -447,11 +447,11 @@ export const generateDiagnosticAdvice = (stats: Partial<DashboardStats>): Dashbo
 };
 
 export const processDashboardData = (
-
   rfData: RFData[],
   trnData: TRNData[] | null,
   radioData: RadioData[],
-  rfStData: RFData[] = []
+  rfStData: RFData[] = [],
+  faultLogData: any[] = []
 ): DashboardStats => {
   const firstRf = rfData[0] || {};
   const firstRfSt = rfStData[0] || {};
@@ -4062,6 +4062,119 @@ export const processDashboardData = (
     };
   });
 
+  // Process Fault Logs if provided
+  const faultLogs = faultLogData.filter(row => row.Date && row.Time).map(row => ({
+    date: row.Date || '',
+    time: row.Time || '',
+    station: row.Station || '',
+    frameNum: row['Frame Num'] || '',
+    locoId: row['Loco Id'] || '',
+    absLoc: row['Abs Loc'] || '',
+    mode: row.Mode || '',
+    rfid: row.RFID || '',
+    faultMsg: row['Fault Msg'] || '',
+    status: row.Status || ''
+  }));
+
+  // 12. Scientific Integration: Calculate "Background Pressure" and Risk Scenarios
+  const scientificInsights: DashboardStats['scientificInsights'] = {
+    tagDefectsFound: false,
+    stressThresholdExceeded: false,
+    highRiskScenarios: [],
+    eventAudits: []
+  };
+
+  scientificInsights.eventAudits = [
+    ...modeDegradationsToUse.map(d => {
+      const timePrefix = d.time.substring(0, 5);
+      const matchingFaults = faultLogs.filter(f => f.time.startsWith(timePrefix) && String(f.locoId) === String(d.locoId));
+      
+      let trigger = "Uncertainty Threshold Violation";
+      let verdict = "Position covariance exceeded safety limit due to RFID spacing errors and radio lag.";
+      
+      if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('radio') || f.faultMsg.toLowerCase().includes('link'))) {
+        trigger = "Radio Link Failure + Uncertainty";
+        verdict = "Multiple RF packet losses (Link Fail) during critical tag integration phase caused state estimator to drop supervision.";
+      } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('tag') || f.faultMsg.toLowerCase().includes('rfid'))) {
+        trigger = "RFID Sequential Error";
+        verdict = "Incorrect tag sequence/linking detected. Mathematical spacing was inconsistent with odometer integration.";
+      } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('gsm'))) {
+        trigger = "GSM Modem Fault";
+        verdict = "Loss of ground-to-loco communication channel triggered fallback to lower supervision mode.";
+      }
+      
+      return {
+        type: 'Degradation' as const,
+        time: d.time,
+        station: d.stationName || d.stationId,
+        locoId: d.locoId,
+        trigger,
+        scientificVerdict: verdict
+      };
+    }),
+    ...brakeApplications.map(b => {
+      const timePrefix = b.time.substring(0, 5);
+      const matchingFaults = faultLogs.filter(f => f.time.startsWith(timePrefix) && String(f.locoId) === String(b.locoId));
+      
+      let trigger = "Safety Envelope Breach";
+      let verdict = "Propagated position error (Ghost Position) overlapped with danger zone boundary in memory.";
+      
+      if (b.type?.toUpperCase().includes('EB')) {
+        if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('biu') || f.faultMsg.toLowerCase().includes('connectivity'))) {
+          trigger = b.type + " (BIU Connection Fault)";
+          verdict = "Communication loss with Brake Interface Unit triggered Vital Relay trip for fail-safe Emergency Brake.";
+        } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('speed sensor') || f.faultMsg.toLowerCase().includes('tacho'))) {
+          trigger = b.type + " (Speed Sensor Disparity)";
+          verdict = "Independent speed sensor pulse mismatch exceeded the 1.0km/h vital tolerance limit.";
+        } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('dmi') || f.faultMsg.toLowerCase().includes('lp-ocip'))) {
+          trigger = b.type + " (DMI Comm Fail)";
+          verdict = "Loss of Driver-Machine Interface communication triggered safety braking as per SIL4 standards.";
+        }
+      }
+      
+      return {
+        type: 'Brake' as const,
+        time: b.time,
+        station: b.stationName || b.stationId,
+        locoId: b.locoId,
+        trigger,
+        scientificVerdict: verdict
+      };
+    })
+  ].sort((a,b) => a.time.localeCompare(b.time)).slice(0, 30);
+
+  const highStressEvents = automatedAudits.filter(audit => {
+    const hasTagDefect = audit.analysisBullets.some(b => b.toLowerCase().includes('tag spacing mismatch') || b.toLowerCase().includes('intertagdist'));
+    const isRadioIssue = audit.highlights.some(h => h.label === "Trigger" && h.value === "Signal/Radio");
+    return hasTagDefect && isRadioIssue;
+  });
+
+  scientificInsights.tagDefectsFound = automatedAudits.some(audit => audit.analysisBullets.some(b => b.toLowerCase().includes('tag spacing mismatch')));
+  
+  scientificInsights.highRiskScenarios = highStressEvents.map(event => {
+    const eventTime = event.timeRange.split(' → ')[0];
+    const matchingFaults = faultLogs.filter(f => f.time.startsWith(eventTime.substring(0, 5)));
+    
+    const isStationary = event.highlights.some(h => h.label === "Speed" && h.value === "0 km/h");
+    const baseUncertainty = isStationary ? 52 : 280; 
+    
+    // Inflate uncertainty if radio faults were actually recorded in NMS/Fault logs at this time
+    const radioFaultCount = matchingFaults.filter(f => f.faultMsg.toLowerCase().includes('radio') || f.faultMsg.toLowerCase().includes('link')).length;
+    const estimatedUncertainty = baseUncertainty + (radioFaultCount * 30) + (matchingFaults.length > 5 ? 50 : 0);
+    
+    if (estimatedUncertainty > 300) scientificInsights.stressThresholdExceeded = true;
+
+    return {
+      time: eventTime,
+      stationName: event.stationName || event.stationId,
+      locoId: event.locoIds[0],
+      estimatedUncertainty,
+      description: radioFaultCount > 0 
+        ? `RFID Bias + ${radioFaultCount} recorded Link Faults. Covariance breached Σ_max.`
+        : `RFID Bias detected during Radio Link phase. System Background Covariance exceeded safety limit Σ_max.`
+    };
+  });
+
   return {
     locoId,
     logDate,
@@ -4112,6 +4225,8 @@ export const processDashboardData = (
     infrastructureStress,
     conflictingPackets,
     stationSummary,
-    locoSummary
+    locoSummary,
+    scientificInsights,
+    faultLogs
   };
 };

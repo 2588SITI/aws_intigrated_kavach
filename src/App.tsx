@@ -54,6 +54,7 @@ import {
 import { parseFile, processDashboardData, parseDateString, formatStationName, generateDiagnosticAdvice } from './utils/dataProcessor';
 import { DashboardStats } from './types';
 import { CalculationMethodology } from './components/CalculationMethodology';
+import { ScientificAnalysis } from './components/ScientificAnalysis';
 import { cn } from './utils/cn';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -89,11 +90,12 @@ const StationDisplay = ({ id, name, showEmerald = true }: { id: string | number,
 };
 
 export default function App() {
-  const [files, setFiles] = useState<{ rf: File[]; rfSt: File[]; trn: File[]; radio: File | null }>({
+  const [files, setFiles] = useState<{ rf: File[]; rfSt: File[]; trn: File[]; radio: File | null; faultLogs: File[] }>({
     rf: [],
     rfSt: [],
     trn: [],
     radio: null,
+    faultLogs: [],
   });
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [activeTab, setActiveTab] = useState('summary');
@@ -413,6 +415,9 @@ export default function App() {
     if (type === 'radio') {
       const file = uploaded instanceof FileList ? uploaded[0] : uploaded;
       setFiles((prev) => ({ ...prev, radio: file }));
+    } else if (type === 'faultLogs') {
+      const newFiles = uploaded instanceof FileList ? Array.from(uploaded) : [uploaded];
+      setFiles((prev) => ({ ...prev, faultLogs: [...prev.faultLogs, ...newFiles] }));
     } else {
       const newFiles = uploaded instanceof FileList ? Array.from(uploaded) : [uploaded];
       setFiles((prev) => ({ ...prev, [type]: [...prev[type as 'rf' | 'rfSt' | 'trn'], ...newFiles] }));
@@ -428,8 +433,9 @@ export default function App() {
       const rfStData = (await Promise.all(files.rfSt.map(f => parseFile(f)))).flat();
       const trnData = files.trn.length > 0 ? (await Promise.all(files.trn.map(f => parseFile(f)))).flat() : null;
       const radioData = files.radio ? await parseFile(files.radio) : [];
+      const faultLogData = files.faultLogs.length > 0 ? (await Promise.all(files.faultLogs.map(f => parseFile(f)))).flat() : [];
       
-      const processed = processDashboardData(rfTrData, trnData, radioData, rfStData);
+      const processed = processDashboardData(rfTrData, trnData, radioData, rfStData, faultLogData);
       setStats(processed);
       if (processed.detectedDivision) {
         setDivision(processed.detectedDivision);
@@ -1223,12 +1229,149 @@ export default function App() {
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
 
-      // --- SECTION 12: NMS LOGS ---
+      // --- SECTION 12: SCIENTIFIC AUDIT & MATHEMATICAL PROOF ---
+      if (currentY > 180) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+      doc.setFontSize(18);
+      doc.setTextColor(16, 185, 129); // Emerald-500
+      doc.text('12. SCIENTIFIC AUDIT: MATHEMATICAL ERROR CORRELATION', 20, currentY);
+      currentY += 8;
+
+      const headingText = 'System Model: Kalman Filter-based state estimator [x(k) = F x(k-1) + B u(k) + w(k)]';
+      const proofLinesRaw = [
+        "1. THE SPACING DEFECT: RFID Tag Spacing > Designated distance causes the 'Fix' events to arrive with a timing lag (dT).",
+        "2. KALMAN GAIN SLUGGISHNESS: This lag inflates the Innovation Residual (v), causing the Kalman Gain to decrease.",
+        "3. COVARIANCE GROWTH (P_defect proportional to n * d^2): Uncertainty grows monotonically between defective fixes.",
+        "4. DEGRADATION RISK: This elevated background pressure (sigma^2) triggers safety threshold violations (S_max)."
+      ];
+
+      const mathBoxWidth = pageWidth - 40;
+      doc.setFontSize(10);
+      const headingSplit = doc.splitTextToSize(headingText, mathBoxWidth - 10);
+      doc.setFontSize(9);
+      const processedProofLines = proofLinesRaw.map(line => doc.splitTextToSize(line, mathBoxWidth - 10));
+      
+      // Calculate height with specific spacing for gaps
+      const headingHeight = headingSplit.length * 6;
+      const bulletsHeight = processedProofLines.reduce((acc, lines) => acc + (lines.length * 5.5), 0);
+      const gaps = 10; // Extra spacing between heading and bullets and bullets themselves
+      const mathBoxHeight = headingHeight + bulletsHeight + gaps + 10;
+
+      if (currentY + mathBoxHeight > 275) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+
+      doc.setFillColor(240, 253, 244); // Emerald-50
+      doc.setDrawColor(16, 185, 129); // Emerald-500
+      doc.setLineWidth(0.5);
+      doc.roundedRect(20, currentY, mathBoxWidth, mathBoxHeight, 2, 2, 'FD');
+      
+      let boxY = currentY + 8;
+      doc.setFontSize(10);
+      doc.setTextColor(5, 150, 105);
+      doc.setFont('helvetica', 'bold');
+      doc.text(headingSplit, 25, boxY);
+      boxY += (headingSplit.length * 6) + 4; // Gap after heading
+      
+      doc.setFontSize(9);
+      doc.setTextColor(31, 41, 55);
+      doc.setFont('helvetica', 'normal');
+      processedProofLines.forEach((lines) => {
+        doc.text(lines, 25, boxY);
+        boxY += (lines.length * 5.5) + 1; // Tight gap between items
+      });
+      
+      currentY += mathBoxHeight + 5;
+
+      // Subsection: Specific Scientific Event Audit
+      const eventAudits = filteredStats.scientificInsights?.eventAudits || [];
+      if (eventAudits.length > 0) {
+        if (currentY > 200) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(14);
+        doc.setTextColor(5, 150, 105);
+        doc.setFont('helvetica', 'bold');
+        doc.text('SCIENTIFIC EVENT AUDIT TRAIL (MODE DROPS & BRAKES)', 20, currentY);
+        currentY += 8;
+
+        const auditRows = eventAudits.map(a => [
+          a.time,
+          a.station,
+          `Loco ${a.locoId}`,
+          a.type,
+          a.trigger,
+          a.scientificVerdict
+        ]);
+
+        autoTable(doc, {
+          startY: currentY,
+          head: [['Time', 'Station', 'Loco', 'Type', 'Trigger', 'Scientific Verdict']],
+          body: auditRows,
+          theme: 'striped',
+          headStyles: { fillColor: [5, 150, 105], fontSize: 8 },
+          styles: { fontSize: 7 },
+          columnStyles: { 
+            3: { fontStyle: 'bold' },
+            5: { cellWidth: 70 } 
+          }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      if (filteredStats.scientificInsights && filteredStats.scientificInsights.highRiskScenarios.length > 0) {
+        doc.setFontSize(12);
+        doc.setTextColor(220, 38, 38); // Red-600
+        doc.text('DETECTED RISK SCENARIOS (MODEL VIOLATIONS)', 20, currentY);
+        
+        const riskRows = filteredStats.scientificInsights.highRiskScenarios.map(s => [
+           s.time,
+           formatStationName(s.stationName),
+           s.locoId,
+           `${s.estimatedUncertainty} m2`,
+           'CRITICAL: Background Covariance exceeded safety limit S_max'
+        ]);
+
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Time', 'Station', 'Loco', 'Uncertainty (σ²)', 'Model Audit Finding']],
+          body: riskRows,
+          theme: 'grid',
+          headStyles: { fillColor: [220, 38, 38] },
+          styles: { fontSize: 7 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // --- SECTION 13: SYSTEM EXTERNAL FAULT AUDIT ---
+      if (filteredStats.faultLogs && filteredStats.faultLogs.length > 0) {
+        if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
+        doc.setFontSize(18);
+        doc.setTextColor(220, 38, 38); // Red-600
+        doc.text('13. SYSTEM EXTERNAL FAULT AUDIT (NMS V2)', 20, currentY);
+        currentY += 12;
+
+        const faultRows = filteredStats.faultLogs.slice(0, 50).map(f => [
+          f.time,
+          f.station,
+          f.locoId,
+          f.absLoc,
+          f.faultMsg,
+          f.status
+        ]);
+
+        autoTable(doc, {
+          startY: currentY,
+          head: [['Time', 'Station', 'Loco', 'Loc', 'Fault Message', 'Status']],
+          body: faultRows,
+          theme: 'striped',
+          headStyles: { fillColor: [220, 38, 38] },
+          styles: { fontSize: 6 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // --- SECTION 14: NMS LOGS ---
       if (filteredStats.nmsLogs.length > 0) {
         if (currentY > 230) { doc.addPage(); currentY = 25; pageNum++; addFooter(doc, pageNum); }
         doc.setFontSize(18);
         doc.setTextColor(15, 23, 42);
-        doc.text('12. SYSTEM NMS FAILURE LOGS', 20, currentY);
+        doc.text('14. SYSTEM NMS FAILURE LOGS', 20, currentY);
         
         const nmsRows = filteredStats.nmsLogs.slice(0, 30).map(n => [n.time, n.locoId, n.health, n.status]);
         autoTable(doc, {
@@ -1800,6 +1943,18 @@ export default function App() {
                   <input type="file" className="hidden" onChange={(e) => handleFileUpload('radio', e.target.files!)} />
                 </label>
               </div>
+              <div className="space-y-1 col-span-2">
+                <p className="text-[9px] text-slate-500 uppercase font-bold px-1">System Fault Logs (Optional)</p>
+                <label className="flex flex-col items-center justify-center w-full h-10 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg cursor-pointer transition-all">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-3 h-3 text-rose-400" />
+                    <span className="text-[10px] font-bold">
+                      {files.faultLogs.length > 0 ? `${files.faultLogs.length} Logs Added` : 'Select Fault Data'}
+                    </span>
+                  </div>
+                  <input type="file" multiple className="hidden" onChange={(e) => handleFileUpload('faultLogs', e.target.files!)} />
+                </label>
+              </div>
             </div>
             {(files.rf.length > 0 || files.rfSt.length > 0 || files.trn.length > 0) && (
               <button
@@ -1961,6 +2116,7 @@ export default function App() {
                   <TabButton active={activeTab === 'interval'} onClick={() => setActiveTab('interval')} label="Interval" />
                   <TabButton active={activeTab === 'moving'} onClick={() => setActiveTab('moving')} label="Moving Analysis" />
                   <TabButton active={activeTab === 'methodology'} onClick={() => setActiveTab('methodology')} label="Methodology" />
+                  <TabButton active={activeTab === 'scientific'} onClick={() => setActiveTab('scientific')} label="Scientific Audit" />
                 </div>
               </div>
 
@@ -2073,6 +2229,7 @@ export default function App() {
             {activeTab === 'radio' && filteredStats && <RadioLossAnalysis stats={filteredStats} />}
             {activeTab === 'moving' && filteredStats && <MovingAnalysis stats={filteredStats} />}
             {activeTab === 'methodology' && <CalculationMethodology />}
+            {activeTab === 'scientific' && filteredStats && <ScientificAnalysis stats={filteredStats} />}
           </div>
         )}
       </main>

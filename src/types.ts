@@ -300,6 +300,25 @@ export interface DashboardStats {
     fsbCount: number;
     attribution: string;
   }[];
+  scientificInsights?: {
+    tagDefectsFound: boolean;
+    stressThresholdExceeded: boolean;
+    highRiskScenarios: {
+      time: string;
+      stationName: string;
+      locoId: string | number;
+      estimatedUncertainty: number;
+      description: string;
+    }[];
+    eventAudits?: {
+      type: 'Degradation' | 'Brake';
+      time: string;
+      station: string;
+      locoId: string | number;
+      trigger: string;
+      scientificVerdict: string;
+    }[];
+  };
   conflictingPackets?: {
     time: string;
     locoId: string | number;
@@ -310,6 +329,18 @@ export interface DashboardStats {
     nmsCodes: string[];
     severity: 'High' | 'Medium';
     radio?: string;
+  }[];
+  faultLogs?: {
+    date: string;
+    time: string;
+    station: string;
+    frameNum: string;
+    locoId: string;
+    absLoc: string;
+    mode: string;
+    rfid: string;
+    faultMsg: string;
+    status: string;
   }[];
 }
 
