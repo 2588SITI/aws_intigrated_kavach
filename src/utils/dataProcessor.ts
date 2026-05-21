@@ -2450,7 +2450,56 @@ export const processDashboardData = (
     }
   });
 
-  const modeDegradationsToUse = finalModeDegradations;
+  // USER REQUEST: Filter out normal mode drops to SR mode when passing VR station in the reverse direction (entering non-Kavach territory)
+  // Also: Filter out standard train termination events (transition to StandBy/ST mode with no subsequent active operation modes)
+  const modeDegradationsToUse = finalModeDegradations.filter(deg => {
+    // 1. VR station reverse direction Staff Responsible boundary transition
+    const isVrStation = String(deg.stationName || deg.stationId || '').trim().toUpperCase().includes('VR');
+    const isReverse = String(deg.direction || '').trim().toLowerCase().includes('reverse') || String(deg.direction || '').trim().toUpperCase() === 'R';
+    const isToSr = String(deg.to || '').trim().toUpperCase() === 'SR' || String(deg.to || '').trim().toUpperCase() === 'STAFFRESPONSIBLE' || String(deg.to || '').trim().toUpperCase().includes('STAFF');
+    
+    if (isVrStation && isReverse && isToSr) {
+      return false; // Skip/exclude this expected boundary transition from fault diagnostics
+    }
+
+    // 2. Train Termination (transition to StandBy/ST mode with no subsequent active operating modes)
+    const isToStandby = (deg.to || '').toUpperCase() === 'ST' || 
+                        (deg.to || '').toUpperCase() === 'STANDBY' || 
+                        (deg.to || '').toUpperCase() === 'STBY' ||
+                        (deg.to || '').toUpperCase().includes('STANDBY');
+
+    if (isToStandby && trnData) {
+      const currentLabelTime = parseTime(deg.time);
+      if (!isNaN(currentLabelTime)) {
+        const subsequentRows = trnData.filter(r => {
+          const rKeys = Object.keys(r);
+          const rLoco = getBestLocoIdFromRow(r, rKeys, locoId);
+          if (String(rLoco) !== String(deg.locoId)) return false;
+
+          const rTime = parseTime(getTrnTime(r));
+          return !isNaN(rTime) && rTime > currentLabelTime;
+        });
+
+        const hasSubsequentActive = subsequentRows.some(r => {
+          const m = String(r[modeCol] || '').trim().toUpperCase();
+          const isActiveMode = m.includes('FS') || m.includes('FULL') ||
+                               m.includes('LS') || m.includes('LIMITED') ||
+                               m.includes('OS') || m.includes('SIGHT') ||
+                               m.includes('PS') || m.includes('PARTIAL') ||
+                               m.includes('SR') || m.includes('STAFF') ||
+                               m.includes('SH') || m.includes('SHUNT');
+          return isActiveMode;
+        });
+
+        // If no subsequent active mode is found, this is a normal train termination at its final destination or end of data.
+        if (!hasSubsequentActive) {
+          return false; // Exclude from mode degradation analysis
+        }
+      }
+    }
+
+    return true;
+  });
 
   // USER REQUEST: Filter tag link issues based on safety impact (Brakes or Mode Degradations)
   const tagLinkIssues = tagLinkIssuesUnfiltered.filter(tag => {
@@ -4086,23 +4135,38 @@ export const processDashboardData = (
 
   scientificInsights.eventAudits = [
     ...modeDegradationsToUse.map(d => {
-      const timePrefix = d.time.substring(0, 5);
-      const matchingFaults = faultLogs.filter(f => f.time.startsWith(timePrefix) && String(f.locoId) === String(d.locoId));
-      
       let trigger = "Uncertainty Threshold Violation";
-      let verdict = "Position covariance exceeded safety limit due to RFID spacing errors and radio lag.";
-      
-      if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('radio') || f.faultMsg.toLowerCase().includes('link'))) {
-        trigger = "Radio Link Failure + Uncertainty";
-        verdict = "Multiple RF packet losses (Link Fail) during critical tag integration phase caused state estimator to drop supervision.";
-      } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('tag') || f.faultMsg.toLowerCase().includes('rfid'))) {
-        trigger = "RFID Sequential Error";
-        verdict = "Incorrect tag sequence/linking detected. Mathematical spacing was inconsistent with odometer integration.";
-      } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('gsm'))) {
-        trigger = "GSM Modem Fault";
-        verdict = "Loss of ground-to-loco communication channel triggered fallback to lower supervision mode.";
+      let verdict = "";
+
+      const fromTo = `${d.from} → ${d.to}`;
+      const activeRadio = d.radio ? `on active ${d.radio}` : '';
+
+      if (d.reason.includes('Radio Packet Loss')) {
+        const delayMatch = d.reason.match(/Max Delay: ([\d.]+)s/);
+        const delayStr = delayMatch ? `${delayMatch[1]}s` : '>2.0s';
+        trigger = `Radio Packet Loss (Timeout: ${delayStr})`;
+        verdict = `During operation at ${d.speed} Kmph ${activeRadio}, a communication lag of ${delayStr} occurred. This exceeded the Kavach SIL4 safety timeout limit. Without receiving fresh Movement Authority updates, the state estimator dropped its confidence, triggering a safe mode degradation from ${fromTo}.`;
+        
+        if (d.tagLinkAtEvent && d.tagLinkAtEvent !== 'N/A' && d.tagLinkAtEvent !== '-') {
+          verdict += ` Compounded by track-side tag warning "${d.tagLinkAtEvent}" which impaired the positioning estimate during the RF dropout.`;
+        }
+      } else if (d.reason.includes('Poor RF Signal')) {
+        trigger = "Poor RF Signal (High PER)";
+        verdict = `Active RF signal strength on the Kavach modem decayed significantly at train speed of ${d.speed} Kmph. High packet error rates prevented successful integration of signal status updates, forcing transition from ${fromTo} to prevent potential authority overruns.`;
+      } else if (d.rootCauseCategory === 'station-tag') {
+        trigger = "RFID Track Spacing Defect";
+        verdict = `Persistent track-side RFID duplicate spacing error ("${d.tagLinkAtEvent || 'InterTagDistGreaterThanDupTag'}") detected at speed ${d.speed} Kmph. This spacing error exceeded standard RDSO tolerances, causing cumulative positioning covariance to exceed standard safety margins (S_max), dropping mode from ${fromTo}.`;
+      } else if (d.rootCauseCategory === 'loco-nms') {
+        trigger = `Loco Hardware Fault (Code: ${d.nmsAtEvent})`;
+        verdict = `Loco internal diagnostics reported critical NMS Health code "${d.nmsAtEvent}" (Vital Processor or BIU mismatched communication). This indicates synchronization or communication stability issues inside the Loco Kavach computer, prompting fallback transition ${fromTo}.`;
+      } else if (d.rootCauseCategory === 'ma-expiry') {
+        trigger = "Movement Authority Expiry";
+        verdict = `The stationary train (0 Kmph) experienced a Movement Authority (MA) timeout. Station-side Kavach failing to transmit a renewed MA packet within the allotted duration prompted fallback to StandBy (ST) mode.`;
+      } else {
+        trigger = `Session Dropout: ${d.reason.split(' - ')[0]}`;
+        verdict = `Kavach session dropout at train speed ${d.speed} Kmph ${activeRadio}. Telemetry reason: "${d.reason}". To maintain safe operations, the on-board estimator fallback protocol was initiated, moving from ${fromTo}.`;
       }
-      
+
       return {
         type: 'Degradation' as const,
         time: d.time,
@@ -4113,25 +4177,30 @@ export const processDashboardData = (
       };
     }),
     ...brakeApplications.map(b => {
-      const timePrefix = b.time.substring(0, 5);
-      const matchingFaults = faultLogs.filter(f => f.time.startsWith(timePrefix) && String(f.locoId) === String(b.locoId));
-      
       let trigger = "Safety Envelope Breach";
-      let verdict = "Propagated position error (Ghost Position) overlapped with danger zone boundary in memory.";
-      
-      if (b.type?.toUpperCase().includes('EB')) {
-        if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('biu') || f.faultMsg.toLowerCase().includes('connectivity'))) {
-          trigger = b.type + " (BIU Connection Fault)";
-          verdict = "Communication loss with Brake Interface Unit triggered Vital Relay trip for fail-safe Emergency Brake.";
-        } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('speed sensor') || f.faultMsg.toLowerCase().includes('tacho'))) {
-          trigger = b.type + " (Speed Sensor Disparity)";
-          verdict = "Independent speed sensor pulse mismatch exceeded the 1.0km/h vital tolerance limit.";
-        } else if (matchingFaults.some(f => f.faultMsg.toLowerCase().includes('dmi') || f.faultMsg.toLowerCase().includes('lp-ocip'))) {
-          trigger = b.type + " (DMI Comm Fail)";
-          verdict = "Loss of Driver-Machine Interface communication triggered safety braking as per SIL4 standards.";
-        }
+      let verdict = "";
+
+      const activeRadio = b.radio ? `on ${b.radio}` : '';
+      const isEb = b.type.toLowerCase().includes('eb') || b.type.toLowerCase().includes('emergency');
+      const brakeName = isEb ? 'Emergency Brake (EB)' : 'Service Brake (SB/FSB)';
+
+      if (b.reason.includes('Overspeed')) {
+        trigger = `${isEb ? 'EB' : 'SB'} - Overspeed Intervention`;
+        verdict = `Dynamically computed speed limits (static track profile or active restrictions) were violated at speed ${b.speed} Kmph. Because on-board speed exceeded the warning and service profiles without driver deceleration, Kavach automatic ${brakeName} initiated.`;
+      } else if (b.reason.includes('SPAD') || b.reason.includes('Danger')) {
+        trigger = `${isEb ? 'EB' : 'SB'} - SPAD Prevention`;
+        verdict = `Train was detected approaching a red signal (Signal at Danger) at speed ${b.speed} Kmph near location ${b.location}. To guarantee the train would not enter the safety overlap section, the Kavach computer commanded automatic full-service/emergency braking.`;
+      } else if (b.reason.includes('Collision') || b.reason.includes('Protection')) {
+        trigger = "Anti-Collision SOS Trip";
+        verdict = `Collision prevention state was activated. Real-time reception of track-side SOS, head-on conflict parameters, or critical block occupancy violation triggers forced automatic ${brakeName} deployment to ensure defensive safety.`;
+      } else if (b.reason.includes('Timeout') || b.reason.includes('MA Timeout')) {
+        trigger = `${isEb ? 'EB' : 'SB'} - Communication Timeout`;
+        verdict = `A critical gap in ground-to-loco communication occurred ${activeRadio} while operating at ${b.speed} Kmph near location ${b.location}. In the absence of validated Movement Authority, the fail-safe vital brake module commanded safety brakes.`;
+      } else {
+        trigger = `${isEb ? 'EB' : 'SB'} - Position Error Offset`;
+        verdict = `Kavach commanded target braking because train position uncertainty (covariance) grew beyond standard SIL4 limits near location ${b.location} (accumulated track-side RFID Spacing drift and radio lag). Safe-wall projections overlapped with authorized authority limits.`;
       }
-      
+
       return {
         type: 'Brake' as const,
         time: b.time,
