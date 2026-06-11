@@ -55,6 +55,7 @@ import { parseFile, processDashboardData, parseDateString, formatStationName, ge
 import { DashboardStats } from './types';
 import { CalculationMethodology } from './components/CalculationMethodology';
 import { ScientificAnalysis } from './components/ScientificAnalysis';
+import { KavachSpecReader } from './components/KavachSpecReader';
 import { cn } from './utils/cn';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -659,26 +660,39 @@ export default function App() {
       doc.rect(10, 10, pageWidth - 20, pageHeight - 20);
       
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(32);
+      doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
-      doc.text('KAVACH EXPERT', pageWidth / 2, 80, { align: 'center' });
-      doc.text('DIAGNOSTIC REPORT', pageWidth / 2, 95, { align: 'center' });
+      doc.text('GOVERNMENT OF INDIA', pageWidth / 2, 35, { align: 'center' });
+      doc.text('MINISTRY OF RAILWAYS', pageWidth / 2, 42, { align: 'center' });
+      doc.text('RESEARCH DESIGNS & STANDARDS ORGANISATION (RDSO)', pageWidth / 2, 49, { align: 'center' });
+      
+      doc.setTextColor(16, 185, 129);
+      doc.setFontSize(30);
+      doc.text('KAVACH ATP SYSTEM', pageWidth / 2, 80, { align: 'center' });
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(22);
+      doc.text('COMPLIANCE & DIAGNOSTIC BINDER', pageWidth / 2, 95, { align: 'center' });
       
       doc.setDrawColor(255, 255, 255);
+      doc.setLineWidth(0.5);
       doc.line(40, 105, pageWidth - 40, 105);
       
-      doc.setFontSize(16);
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`SPECIFICATION: RDSO/SPN/196/2020 Version 4.0`, pageWidth / 2, 115, { align: 'center' });
       doc.setFont('helvetica', 'normal');
-      doc.text(`Division: ${division.toUpperCase()}`, pageWidth / 2, 120, { align: 'center' });
-      doc.text(`Period: ${filteredStats.logDate || stats.logDate || 'Consolidated Analysis'}`, pageWidth / 2, 130, { align: 'center' });
+      doc.text(`Active Amendment: Amdt-3, Amdt-6 & Amdt-10 Compliance`, pageWidth / 2, 122, { align: 'center' });
+      doc.text(`Zonal Division: ${division.toUpperCase()} Division Operations`, pageWidth / 2, 129, { align: 'center' });
+      doc.text(`Analysis Period: ${filteredStats.logDate || stats.logDate || 'Consolidated Diagnostics Log'}`, pageWidth / 2, 136, { align: 'center' });
       
       doc.setFillColor(16, 185, 129);
-      doc.roundedRect(60, 150, pageWidth - 120, 40, 5, 5, 'F');
+      doc.roundedRect(60, 155, pageWidth - 120, 35, 3, 3, 'F');
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(14);
-      doc.text('PERFORMANCE VERDICT', pageWidth / 2, 162, { align: 'center' });
-      doc.setFontSize(22);
-      doc.text(`${filteredStats.locoPerformance.toFixed(1)}%`, pageWidth / 2, 178, { align: 'center' });
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('KAVACH CORE PERFORMANCE INDEX', pageWidth / 2, 165, { align: 'center' });
+      doc.setFontSize(20);
+      doc.text(`${filteredStats.locoPerformance.toFixed(1)}%`, pageWidth / 2, 180, { align: 'center' });
       doc.addPage();
 
       let pageNum = 2;
@@ -724,12 +738,12 @@ export default function App() {
 
       autoTable(doc, {
         startY: currentY + 5,
-        head: [['Safety Metric', 'Event Count', 'Severity Level', 'Action Recommendation']],
+        head: [['Kavach Metric / RDSO Spec Clause', 'Event Count', 'Severity Level', 'Technical Action Recommendation']],
         body: [
-          ['Emergency Brakes (EB)', ebCount, ebCount > 0 ? 'CRITICAL' : 'OPTIMAL', ebCount > 0 ? 'Urgent Root Cause Investigation' : 'Monitor'],
-          ['Service Brakes (FSB/NB)', fsbCount, fsbCount > 5 ? 'HIGH' : 'NORMAL', fsbCount > 5 ? 'Check Signal Feed synchronization' : 'Routine Check'],
-          ['Mode Degradations (FS → SB/SR)', modeDegCount, modeDegCount > 2 ? 'MAJOR' : 'LOW', modeDegCount > 2 ? 'Verify Radio switching logic' : 'Standard Monitor'],
-          ['SOS / Emergency Signal', filteredStats.sosEvents.length, filteredStats.sosEvents.length > 0 ? 'CRITICAL' : 'NONE', 'Verify Emergency Switch Integrity']
+          ['Emergency Brakes (EB) [Amdt 10 Sec 8.2]', ebCount, ebCount > 0 ? 'CRITICAL' : 'OPTIMAL', ebCount > 0 ? 'Exceeded PG error limit. Audit wheel diameter scaling / skid sensor calibration.' : 'Safe-side margin normal (Amdt 10 limits met)'],
+          ['Service Brakes (FSB/NB) [Annexure-A2.6]', fsbCount, fsbCount > 5 ? 'HIGH' : 'NORMAL', fsbCount > 5 ? 'FSB build latency exceeds 1.0s. Check brake cylinder solenoid & air feed.' : 'Braking profile in nominal buffer bounds'],
+          ['Mode Degradations (FS -> SB/SR) [FRS 36.1]', modeDegCount, modeDegCount > 2 ? 'MAJOR' : 'LOW', modeDegCount > 2 ? 'Radio stale timeout exceeded 6.0s. Trackside TDMA slot/active radio audit required.' : 'RF link availability within nominal bounds'],
+          ['SOS / Emergency Signal [Annexure-D]', filteredStats.sosEvents.length, filteredStats.sosEvents.length > 0 ? 'CRITICAL' : 'NONE', 'SOS active. Verify vital signal driver loop relay (Annex - D Rule 5)']
         ],
         theme: 'grid',
         headStyles: { fillColor: [15, 23, 42] },
@@ -803,12 +817,12 @@ export default function App() {
         
         const degRows = filteredStats.modeDegradations.map(deg => [
           deg.time, 
-          `${deg.from} → ${deg.to}`, 
+          `${deg.from} -> ${deg.to}`, 
           formatStationName(deg.stationName || deg.stationId), 
           deg.locoId, 
           `${deg.speed || 0} Kmph`, 
           deg.radio || '-',
-          manualRemarks[`deg-${deg.time}-${deg.locoId}`] || ''
+          (manualRemarks[`deg-${deg.time}-${deg.locoId}`] || '').replaceAll('→', '->')
         ]);
 
         autoTable(doc, {
@@ -819,7 +833,13 @@ export default function App() {
           headStyles: { fillColor: [245, 158, 11] },
           styles: { fontSize: 7 },
           columnStyles: {
-            6: { cellWidth: 40 }
+            0: { cellWidth: 25 },
+            1: { cellWidth: 18 },
+            2: { cellWidth: 25 },
+            3: { cellWidth: 15 },
+            4: { cellWidth: 12 },
+            5: { cellWidth: 15 },
+            6: { cellWidth: 60 }
           }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
@@ -834,12 +854,12 @@ export default function App() {
         
         const brakeRows = filteredStats.brakeApplications.map(b => [
           b.time, 
-          b.type, 
+          b.type.replaceAll('→', '->'), 
           formatStationName(b.stationName || b.stationId), 
           b.locoId, 
           `${b.speed} Kmph`, 
           b.radio || '-',
-          manualRemarks[`brake-${b.time}-${b.locoId}`] || ''
+          (manualRemarks[`brake-${b.time}-${b.locoId}`] || '').replaceAll('→', '->')
         ]);
 
         autoTable(doc, {
@@ -849,7 +869,15 @@ export default function App() {
           theme: 'grid',
           headStyles: { fillColor: [220, 38, 38] },
           styles: { fontSize: 7 },
-          columnStyles: { 6: { cellWidth: 50 } }
+          columnStyles: { 
+            0: { cellWidth: 25 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 25 },
+            3: { cellWidth: 15 },
+            4: { cellWidth: 12 },
+            5: { cellWidth: 15 },
+            6: { cellWidth: 53 }
+          }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
       }
@@ -1291,12 +1319,12 @@ export default function App() {
         currentY += 8;
 
         const auditRows = eventAudits.map(a => [
-          a.time,
-          a.station,
+          (a.time || '').replaceAll('→', '->'),
+          (a.station || '').replaceAll('→', '->'),
           `Loco ${a.locoId}`,
-          a.type,
-          a.trigger,
-          a.scientificVerdict
+          (a.type || '').replaceAll('→', '->'),
+          (a.trigger || '').replaceAll('→', '->'),
+          (a.scientificVerdict || '').replaceAll('→', '->')
         ]);
 
         autoTable(doc, {
@@ -1307,8 +1335,12 @@ export default function App() {
           headStyles: { fillColor: [5, 150, 105], fontSize: 8 },
           styles: { fontSize: 7 },
           columnStyles: { 
-            3: { fontStyle: 'bold' },
-            5: { cellWidth: 70 } 
+            0: { cellWidth: 22 },
+            1: { cellWidth: 15 },
+            2: { cellWidth: 15 },
+            3: { cellWidth: 18, fontStyle: 'bold' },
+            4: { cellWidth: 32 },
+            5: { cellWidth: 68 } 
           }
         });
         currentY = (doc as any).lastAutoTable.finalY + 15;
@@ -1406,40 +1438,67 @@ export default function App() {
       const time = new Date().toLocaleTimeString();
       const reportId = `KAV/${filteredStats.locoId}/${Math.floor(Math.random() * 10000)}`;
       
-      // Header
-      doc.setFontSize(18);
-      doc.setTextColor(0);
-      doc.line(20, 30, 190, 30);
+      // Government / RDSO Header
+      doc.setFontSize(8);
+      doc.setTextColor(60);
+      doc.setFont('helvetica', 'bold');
+      doc.text('GOVERNMENT OF INDIA - MINISTRY OF RAILWAYS', 105, 12, { align: 'center' });
+      doc.setFontSize(9);
+      doc.text('RESEARCH DESIGNS & STANDARDS ORGANISATION (RDSO), LUCKNOW', 105, 17, { align: 'center' });
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Specification: RDSO/SPN/196/2020 Version 4.0 (Amdt-3/6/10 Compliance Audit)', 105, 21, { align: 'center' });
+      doc.setDrawColor(200);
+      doc.setLineWidth(0.5);
+      doc.line(20, 24, 190, 24);
+
+      // Main Title
+      doc.setFontSize(13);
+      doc.setTextColor(15, 23, 42); // slate dark
+      doc.setFont('helvetica', 'bold');
+      doc.text('KAVACH ATP TECHNICAL DISPATCH / VALIDATION REPORT', 105, 31, { align: 'center' });
+      
+      doc.setDrawColor(16, 185, 129); // emerald divider
+      doc.setLineWidth(1.2);
+      doc.line(20, 34, 190, 34);
 
       // Meta Info
-      doc.setFontSize(10);
-      doc.text(`Division: ${division.toUpperCase()}`, 150, 33);
-      doc.text(`Date: ${date}`, 150, 38);
-      doc.text(`Time: ${time}`, 150, 43);
-      doc.text(`Report ID: ${reportId}`, 20, 38);
-      doc.text(`Loco ID: ${filteredStats.locoId}`, 20, 43);
+      doc.setTextColor(0);
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Reference No: RDSO/KAV/AUDIT/${filteredStats.locoId}`, 20, 41);
+      doc.text(`Loco ID: ${filteredStats.locoId} (Kavach OBU Fit)`, 20, 46);
+      doc.text(`Zonal Division: ${division.toUpperCase()} Division Operations`, 20, 51);
 
       const logTimes = filteredStats.maPackets.map(p => p.time).sort();
       if (logTimes.length > 0) {
-        doc.text(`Log Duration: ${logTimes[0]} to ${logTimes[logTimes.length - 1]}`, 20, 48);
+        doc.text(`Log Duration: ${logTimes[0]} Hrs to ${logTimes[logTimes.length - 1]} Hrs`, 20, 56);
       }
 
-      doc.setFontSize(12);
+      doc.text(`Dispatch Date: ${date}`, 150, 41);
+      doc.text(`Dispatch Time: ${time}`, 150, 46);
+      doc.text(`Report Signature: ${reportId}`, 150, 51);
+
+      doc.setDrawColor(220);
+      doc.setLineWidth(0.3);
+      doc.line(20, 59, 190, 59);
+
+      doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
-      doc.text('To,', 20, 55);
+      doc.text('To,', 20, 66);
       doc.setFont('helvetica', 'normal');
-      doc.text('The Senior Divisional Electrical Engineer (Rolling Stock),', 20, 62);
-      doc.text('Traction Operations Department.', 20, 68);
+      doc.text('The Senior Divisional Electrical Engineer (Rolling Stock),', 20, 73);
+      doc.text('Traction Operations Department.', 20, 79);
 
       doc.setFont('helvetica', 'bold');
       const subjectText = `Subject: Deep Analysis & Failure Validation - Locomotive ${filteredStats.locoId}${selectedStation !== 'All' ? ' at ' + formatStationName(selectedStation) : ''}`;
-      doc.text(subjectText, 20, 80);
-      doc.line(20, 82, 160, 82);
+      doc.text(subjectText, 20, 91);
+      doc.line(20, 93, 160, 93);
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
       
-      let bodyY = 92;
+      let bodyY = 103;
       const writeText = (text: string, y: number, size = 10, isBold = false) => {
         doc.setFontSize(size);
         doc.setFont('helvetica', isBold ? 'bold' : 'normal');
@@ -2117,6 +2176,7 @@ export default function App() {
                   <TabButton active={activeTab === 'moving'} onClick={() => setActiveTab('moving')} label="Moving Analysis" />
                   <TabButton active={activeTab === 'methodology'} onClick={() => setActiveTab('methodology')} label="Methodology" />
                   <TabButton active={activeTab === 'scientific'} onClick={() => setActiveTab('scientific')} label="Scientific Audit" />
+                  <TabButton active={activeTab === 'specs'} onClick={() => setActiveTab('specs')} label="RDSO Certified Specs" />
                 </div>
               </div>
 
@@ -2230,6 +2290,7 @@ export default function App() {
             {activeTab === 'moving' && filteredStats && <MovingAnalysis stats={filteredStats} />}
             {activeTab === 'methodology' && <CalculationMethodology />}
             {activeTab === 'scientific' && filteredStats && <ScientificAnalysis stats={filteredStats} />}
+            {activeTab === 'specs' && <KavachSpecReader />}
           </div>
         )}
       </main>

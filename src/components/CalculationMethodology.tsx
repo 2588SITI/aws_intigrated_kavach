@@ -1,6 +1,7 @@
 import React from 'react';
-import { Calculator, Info, CheckCircle2, AlertCircle, ArrowRight, Layers, Divide } from 'lucide-react';
+import { Calculator, Info, CheckCircle2, AlertCircle, ArrowRight, Layers, Divide, BookOpen, ShieldCheck, Radio, Database, Activity, FileText } from 'lucide-react';
 import { motion } from 'motion/react';
+import { KAVACH_OFFICIAL_SPECS } from '../utils/kavachSpecs';
 
 export const CalculationMethodology: React.FC = () => {
   return (
@@ -144,6 +145,125 @@ export const CalculationMethodology: React.FC = () => {
             <div className="bg-emerald-500 p-4 rounded-xl flex flex-col justify-center shadow-lg shadow-emerald-500/20">
               <span className="text-[10px] text-white/70 uppercase font-bold mb-1">Final Weighted %</span>
               <span className="text-3xl font-mono font-black text-white">98.61%</span>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* RDSO KAVACH Specification Reference Library */}
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        className="glass-card p-6 rounded-2xl border-t-2 border-emerald-500 relative overflow-hidden group space-y-6"
+      >
+        <div className="flex items-center gap-3">
+          <BookOpen className="w-6 h-6 text-emerald-400" />
+          <h3 className="text-xl font-bold text-white uppercase tracking-tight">Kavach RDSO Specifications & Official Reference Library</h3>
+        </div>
+
+        <p className="text-slate-300 text-sm leading-relaxed max-w-4xl">
+          Based on the official <span className="text-emerald-400 font-bold">{KAVACH_OFFICIAL_SPECS.version}</span> specification documents and <span className="text-emerald-400 font-bold">Amendment-{KAVACH_OFFICIAL_SPECS.amendmentNo}</span> uploaded to this system, the following operational and network communication rules are loaded into the diagnostic state engine to drive logic and scientific verdicts:
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {/* Box 1: Multiple Access Slotting (Amdt 10) */}
+          <div className="bg-white/5 rounded-xl p-5 border border-white/10 space-y-3">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold">
+              <Radio className="w-4 h-4" />
+              <span className="text-sm font-bold uppercase text-white">Multiple Access scheme (Amdt-10)</span>
+            </div>
+            <ul className="text-xs text-slate-300 space-y-2 list-disc list-inside font-medium leading-relaxed">
+              <li>Each Multiple Access frame cycle spans <span className="text-emerald-400 font-mono">2000 ms</span>.</li>
+              <li>TDMA/FDMA/SDMA contains <span className="text-emerald-400 font-mono">70 time slots</span> (previously 68), width of <span className="text-emerald-400 font-mono">432 bits (22.5 ms)</span>.</li>
+              <li>P2 starts exactly at <span className="text-emerald-300">45 ms</span> from cycle start. P47 starts at <span className="text-emerald-300">1320 ms</span>.</li>
+              <li>Positions <span className="font-mono text-emerald-400">P1 & P46</span> are kept as reserve.</li>
+              <li>Radio 1 transmission prefix: <span className="font-mono bg-black/40 px-1 py-0.5 rounded text-emerald-400">0xF1 0xA5 0xC3</span>.</li>
+              <li>Radio 2 transmission prefix: <span className="font-mono bg-black/40 px-1 py-0.5 rounded text-emerald-400">0xF2 0xA5 0xC3</span>.</li>
+            </ul>
+          </div>
+
+          {/* Box 2: Radio Failure Fallbacks (FRS 36.1) */}
+          <div className="bg-white/5 rounded-xl p-5 border border-white/10 space-y-3">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold">
+              <ShieldCheck className="w-4 h-4" />
+              <span className="text-sm font-bold uppercase text-white">Radio Failure & Fallbacks (FRS 36.1)</span>
+            </div>
+            <ul className="text-xs text-slate-300 space-y-2 list-disc list-inside font-medium leading-relaxed">
+              <li>If stationary packet is <span className="text-emerald-400 font-bold">&gt; 6 seconds</span> old, signal aspects turn blank.</li>
+              <li>With active track profile (<span className="text-emerald-400 font-mono">&lt; 3000m</span>): FS/OS transits dynamically to <span className="text-emerald-400 font-bold">Limited Supervision (LS)</span>.</li>
+              <li>Without active track profile: FS/OS transits dynamically to <span className="text-emerald-400 font-bold">Staff Responsible (SR)</span>.</li>
+              <li>Stipulated Driver Ack Timeout: <span className="text-emerald-400 font-mono">15 seconds</span>.</li>
+              <li>Failure to acknowledge transits: Automatic command to trigger <span className="text-rose-400 font-bold">Service Brakes (SB)</span>.</li>
+            </ul>
+          </div>
+
+          {/* Box 3: Safe-Side Distance Calculations */}
+          <div className="bg-white/5 rounded-xl p-5 border border-white/10 space-y-3 md:col-span-2 xl:col-span-1">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold">
+              <Activity className="w-4 h-4" />
+              <span className="text-sm font-bold uppercase text-white">Safe-Side Distance Formulas</span>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div className="space-y-1">
+                <div className="text-emerald-400 font-mono font-bold uppercase">L_DOUBTOVER (Supervision of Targets):</div>
+                <p className="text-slate-300 leading-relaxed bg-black/20 p-2 rounded border border-white/5">
+                  Over-reading + 5m GPS/RFID accuracy + 5% odometer error + Reader Offset in Rear End (ROR). Evaluates PSR, TSR, Linking, Rear End Collisions.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <div className="text-emerald-400 font-mono font-bold uppercase">L_DOUBTUNDER (Discarding Locations):</div>
+                <p className="text-slate-300 leading-relaxed bg-black/20 p-2 rounded border border-white/5">
+                  Under-reading + 5m GPS/RFID accuracy + 5% odometer error + Reader Offset from Front End (RORF). Evaluates Tag links, Head-on Collisions.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic specifications mapping tables */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-white/5">
+          {/* Table A: Packet Types & Codes (Amdt L12) */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-400 tracking-wider">
+              <Database className="w-3 h-3 text-slate-400" />
+              <span>RF Protocol Packet Architecture (Amdt 10)</span>
+            </div>
+            <div className="bg-black/30 rounded-xl border border-white/10 overflow-hidden text-xs">
+              <div className="grid grid-cols-4 bg-white/5 p-2 font-bold text-slate-400 border-b border-white/5">
+                <div className="col-span-1">PKT_TYPE</div>
+                <div className="col-span-3">Description / Operational Directive</div>
+              </div>
+              <div className="divide-y divide-white/5">
+                {Object.values(KAVACH_OFFICIAL_SPECS.packetTypes).map(p => (
+                  <div key={p.code} className="grid grid-cols-4 p-2.5 font-mono text-[11px]">
+                    <div className="col-span-1 text-emerald-400 font-bold">{p.code}</div>
+                    <div className="col-span-3 text-slate-300">{p.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Table B: Tag Link Spacing Status codes */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-400 tracking-wider">
+              <FileText className="w-3 h-3 text-slate-400" />
+              <span>TAG_LINK_INFO Diagnostics Codes</span>
+            </div>
+            <div className="bg-black/30 rounded-xl border border-white/10 overflow-hidden text-xs">
+              <div className="grid grid-cols-4 bg-white/5 p-2 font-bold text-slate-400 border-b border-white/5">
+                <div className="col-span-1">TAG_LINK</div>
+                <div className="col-span-3">Diagnostic Status Definition</div>
+              </div>
+              <div className="divide-y divide-white/5 max-h-56 overflow-y-auto">
+                {Object.entries(KAVACH_OFFICIAL_SPECS.tagLinkInfo).map(([code, p]) => (
+                  <div key={code} className="grid grid-cols-4 p-2 font-mono text-[11px]">
+                    <div className="col-span-1 text-emerald-400 font-bold">{code}</div>
+                    <div className="col-span-3 text-slate-300">{p.desc}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
